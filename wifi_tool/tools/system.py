@@ -18,6 +18,21 @@ WINDOWS_NOT_AVAILABLE = "not available on Windows"
 # airodump-ng, aireplay-ng, and monitor-mode support.
 NPCAP_DOWNLOAD_URL = "https://npcap.com/#download"
 
+# Download URLs for tools that have Windows builds distributed as archives
+# (not available as winget or Chocolatey packages).
+#
+# aircrack-ng ships a Windows .zip from its official site; there is no winget
+# package for it (winget only supports .zip/.exe/.msi installers and the
+# aircrack-ng zip is not registered in the winget repository).
+#
+# hashcat ships a Windows .7z archive from its official site; winget does not
+# support .7z packages and hashcat is not registered in the winget repository
+# (see https://github.com/hashcat/hashcat/issues/4215). Additionally, on
+# Windows hashcat must be run from its own directory — it cannot locate its
+# kernel files when invoked from a different directory via PATH alone.
+AIRCRACK_WINDOWS_DOWNLOAD_URL = "https://www.aircrack-ng.org/downloads.html"
+HASHCAT_WINDOWS_DOWNLOAD_URL = "https://hashcat.net/hashcat/"
+
 # Candidate locations for Npcap's WlanHelper.exe (monitor-mode toggling)
 _NPCAP_WLANHELPER_PATHS: List[str] = [
     r"C:\Windows\System32\Npcap\WlanHelper.exe",
@@ -39,10 +54,15 @@ TOOL_PACKAGES: Dict[str, str] = {
     "iw": "iw",
 }
 
-# Maps tool executable name -> winget/Chocolatey package name (Windows).
+# Maps tool executable name -> install hint for Windows.
 #
 # airodump-ng and aireplay-ng are bundled in the official Windows build of
-# aircrack-ng and work natively with Npcap.
+# aircrack-ng and work natively with Npcap.  The Windows build is distributed
+# as a .zip from the official site — there is no winget package for it.
+#
+# hashcat is distributed as a .7z archive from its official site — winget
+# does not support .7z packages and hashcat is not in the winget repository
+# (see https://github.com/hashcat/hashcat/issues/4215).
 #
 # airmon-ng is a Linux bash script; on Windows Npcap's WlanHelper.exe is
 # used instead to toggle monitor mode (see enable_monitor_mode).
@@ -56,17 +76,17 @@ TOOL_PACKAGES: Dict[str, str] = {
 # iw is a Linux kernel netlink tool; netsh covers the same use-cases on
 # Windows and is already used by get_wireless_interfaces().
 TOOL_PACKAGES_WINDOWS: Dict[str, str] = {
-    "airmon-ng":     WINDOWS_NOT_AVAILABLE,         # replaced by WlanHelper (Npcap)
-    "airodump-ng":   "Aircrack-ng.Aircrack-ng",     # bundled in Windows aircrack-ng
-    "aireplay-ng":   "Aircrack-ng.Aircrack-ng",     # bundled in Windows aircrack-ng
-    "aircrack-ng":   "Aircrack-ng.Aircrack-ng",
-    "hashcat":       "Hashcat.Hashcat",
-    "hcxdumptool":   WINDOWS_NOT_AVAILABLE,         # replaced by pcap_utils (Python)
-    "hcxpcapngtool": WINDOWS_NOT_AVAILABLE,         # replaced by pcap_utils (Python)
+    "airmon-ng":     WINDOWS_NOT_AVAILABLE,              # replaced by WlanHelper (Npcap)
+    "airodump-ng":   AIRCRACK_WINDOWS_DOWNLOAD_URL,      # bundled in Windows aircrack-ng zip
+    "aireplay-ng":   AIRCRACK_WINDOWS_DOWNLOAD_URL,      # bundled in Windows aircrack-ng zip
+    "aircrack-ng":   AIRCRACK_WINDOWS_DOWNLOAD_URL,      # download .zip from official site
+    "hashcat":       HASHCAT_WINDOWS_DOWNLOAD_URL,       # download .7z from official site
+    "hcxdumptool":   WINDOWS_NOT_AVAILABLE,              # replaced by pcap_utils (Python)
+    "hcxpcapngtool": WINDOWS_NOT_AVAILABLE,              # replaced by pcap_utils (Python)
     "bettercap":     "bettercap",
-    "wifite":        WINDOWS_NOT_AVAILABLE,         # requires airmon-ng (Linux only)
+    "wifite":        WINDOWS_NOT_AVAILABLE,              # requires airmon-ng (Linux only)
     "git":           "Git.Git",
-    "iw":            WINDOWS_NOT_AVAILABLE,         # replaced by netsh
+    "iw":            WINDOWS_NOT_AVAILABLE,              # replaced by netsh
 }
 
 # GitHub source repos for reference
@@ -380,7 +400,16 @@ def kill_interfering_processes() -> str:
 
 
 def _install_tool_windows(package: str) -> Tuple[bool, str]:
-    """Install *package* on Windows using winget (primary) or chocolatey (fallback)."""
+    """Install *package* on Windows using winget (primary) or chocolatey (fallback).
+
+    If *package* is a URL the tool must be downloaded and installed manually;
+    automated installation is not possible and instructions are returned instead.
+    """
+    if package.startswith("https://"):
+        return False, (
+            "This tool is not available as a winget or Chocolatey package.\n"
+            f"  Download and install the Windows build manually from: {package}"
+        )
     if not is_root():
         return False, "Administrator privileges required for installation."
     for mgr, cmd in [
@@ -410,6 +439,8 @@ def install_tool(package: str) -> Tuple[bool, str]:
     """Install *package* using the platform package manager.
 
     On Windows uses winget or chocolatey; on Linux/macOS uses apt-get.
+    If *package* is a URL (tools distributed as archives without a package
+    manager entry) installation instructions are returned instead.
     Requires elevated privileges in both cases.
     """
     if IS_WINDOWS:

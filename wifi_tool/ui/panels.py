@@ -10,6 +10,8 @@ from rich import box
 from ..data.protocols import ALL_PROTOCOLS, PROTOCOL_COMPARISON
 from ..data.attacks import ALL_ATTACKS
 from ..tools.system import (
+    AIRCRACK_WINDOWS_DOWNLOAD_URL,
+    HASHCAT_WINDOWS_DOWNLOAD_URL,
     IS_WINDOWS,
     NPCAP_DOWNLOAD_URL,
     TOOL_PACKAGES,
@@ -52,12 +54,17 @@ def render_tool_status(console: Console) -> None:
     """Print a table showing which real tools are installed."""
     status = get_all_tool_status()
     active_packages = TOOL_PACKAGES_WINDOWS if IS_WINDOWS else TOOL_PACKAGES
-    pkg_label = "winget / Chocolatey package" if IS_WINDOWS else "apt package"
+    pkg_label = "Package / Download" if IS_WINDOWS else "apt package"
 
     # Tools replaced by the Python pcap_utils module on Windows
     _PYTHON_NATIVE_WINDOWS = {"hcxdumptool", "hcxpcapngtool"}
     # Tool replaced by WlanHelper on Windows
     _WLANHELPER_TOOLS = {"airmon-ng"}
+    # Tools whose Windows builds are distributed as archives (no package manager)
+    _WINDOWS_DOWNLOAD_URLS = {
+        AIRCRACK_WINDOWS_DOWNLOAD_URL,
+        HASHCAT_WINDOWS_DOWNLOAD_URL,
+    }
 
     table = Table(
         title="Installed Tools",
@@ -97,6 +104,12 @@ def render_tool_status(console: Console) -> None:
             display_pkg = f"Npcap — {NPCAP_DOWNLOAD_URL}"
         elif IS_WINDOWS and win_pkg == WINDOWS_NOT_AVAILABLE:
             status_text = Text("— Linux only", style="dim")
+        elif IS_WINDOWS and win_pkg in _WINDOWS_DOWNLOAD_URLS:
+            if installed:
+                status_text = Text("✔ installed", style="green bold")
+            else:
+                status_text = Text("✘ missing", style="red bold")
+            display_pkg = f"Download — {win_pkg}"
         elif installed:
             status_text = Text("✔ installed", style="green bold")
         else:

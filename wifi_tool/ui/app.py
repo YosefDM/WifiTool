@@ -110,6 +110,13 @@ def _require_tool(name: str, package: Optional[str] = None) -> bool:
             )
             return False
         pkg = win_pkg or package or name
+        if pkg.startswith("https://"):
+            console.print(
+                f"[red]✘ {name} is not installed.[/red]\n"
+                f"  No winget/Chocolatey package is available for this tool.\n"
+                f"  Download the Windows build from: [bold cyan]{pkg}[/bold cyan]"
+            )
+            return False
         console.print(
             f"[red]✘ {name} is not installed.[/red]\n"
             f"  Install with winget: [bold cyan]winget install {pkg}[/bold cyan]\n"
@@ -297,6 +304,12 @@ def menu_system_setup() -> None:
                             console.print(
                                 f"[dim]{tool} — not available on Windows "
                                 f"(Linux only)[/dim]"
+                            )
+                            continue
+                        if system.IS_WINDOWS and pkg.startswith("https://"):
+                            console.print(
+                                f"[yellow]{tool}[/yellow] — no winget/Chocolatey package "
+                                f"available. Download from: [cyan]{pkg}[/cyan]"
                             )
                             continue
                         if Confirm.ask(f"Install [bold]{pkg}[/bold]?", default=True):

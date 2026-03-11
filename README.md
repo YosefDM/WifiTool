@@ -19,7 +19,7 @@ double-click:
 
 | Script | Purpose |
 |---|---|
-| `setup.bat` | **Run once.** Installs Python (via winget if missing), installs `rich` and `scapy`, optionally installs aircrack-ng / hashcat / Git, and opens the Npcap download page. |
+| `setup.bat` | **Run once.** Installs Python (via winget if missing), installs `rich` and `scapy`, opens the aircrack-ng and hashcat download pages, optionally installs Git via winget, and opens the Npcap download page. |
 | `WifiTool.bat` | **Run every time.** Launches WifiTool; automatically requests Administrator privileges. |
 
 ### Steps
@@ -110,19 +110,29 @@ Npcap provides:
 - `WlanHelper.exe` — used by WifiTool to enable/disable monitor mode on Windows
   (replaces `airmon-ng`)
 
-#### 4. Install aircrack-ng and optional tools (Administrator PowerShell)
+#### 4. Install aircrack-ng and optional tools
+
+**aircrack-ng** (includes `airodump-ng.exe` and `aireplay-ng.exe`):
+- No winget or Chocolatey package exists for aircrack-ng
+- Download the Windows `.zip` from **https://www.aircrack-ng.org/downloads.html**,
+  extract it, and add the folder to `PATH`
+
+**hashcat** (GPU-accelerated password cracking):
+- No winget package exists for hashcat — it is distributed as a `.7z` archive
+  ([hashcat/hashcat#4215](https://github.com/hashcat/hashcat/issues/4215))
+- Download from **https://hashcat.net/hashcat/**, extract to a permanent folder,
+  and run `hashcat.exe` **from that folder** (hashcat on Windows requires the
+  current directory to be its own folder to locate its kernel files)
+
+**git** (needed to clone KRACK test scripts):
 
 ```powershell
-# aircrack-ng Windows build — includes airodump-ng.exe and aireplay-ng.exe
-winget install aircrack-ng
-
-# hashcat — GPU-accelerated password cracking
-winget install hashcat
-
-# git — needed to clone KRACK test scripts
 winget install Git.Git
+```
 
-# bettercap (optional)
+**bettercap** (optional):
+
+```powershell
 choco install bettercap
 ```
 
