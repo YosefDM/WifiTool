@@ -57,7 +57,80 @@ than simulating them.
 
 ## Installation
 
-### 1. Install Python dependency
+### Windows 11
+
+#### 1. Install Python (if not already installed)
+
+```powershell
+winget install Python.Python.3
+```
+
+#### 2. Install WifiTool dependencies
+
+```powershell
+pip install -r requirements.txt
+# (installs rich and scapy — scapy powers the Windows-native capture tools)
+```
+
+#### 3. Install Npcap (required for monitor mode and packet capture)
+
+Download and install Npcap from **https://npcap.com/#download**.
+During installation check **"Support raw 802.11 traffic (monitor mode)"**.
+
+Npcap provides:
+- The packet-capture driver used by `airodump-ng.exe` and `aireplay-ng.exe`
+- `WlanHelper.exe` — used by WifiTool to enable/disable monitor mode on Windows
+  (replaces `airmon-ng`)
+
+#### 4. Install aircrack-ng and optional tools (Administrator PowerShell)
+
+```powershell
+# aircrack-ng Windows build — includes airodump-ng.exe and aireplay-ng.exe
+winget install aircrack-ng
+
+# hashcat — GPU-accelerated password cracking
+winget install hashcat
+
+# git — needed to clone KRACK test scripts
+winget install Git.Git
+
+# bettercap (optional)
+choco install bettercap
+```
+
+#### 5. Run WifiTool
+
+```powershell
+# From an Administrator PowerShell (right-click → Run as administrator):
+python main.py
+```
+
+#### Windows feature availability
+
+| Feature | Windows support |
+|---|---|
+| Network Discovery (quick) | ✔ Native — `netsh wlan show networks` |
+| Network Discovery (full) | ✔ `airodump-ng.exe` + Npcap (monitor mode) |
+| Monitor mode enable/disable | ✔ Npcap `WlanHelper.exe` (replaces `airmon-ng`) |
+| airodump-ng / aireplay-ng | ✔ Windows aircrack-ng build + Npcap |
+| aircrack-ng cracking | ✔ Full |
+| hashcat cracking | ✔ Full (GPU-accelerated) |
+| hcxdumptool (PMKID capture) | ✔ Python/scapy replacement (pcap_utils) |
+| hcxpcapngtool (pcap→hc22000) | ✔ Python/scapy replacement (pcap_utils) |
+| bettercap | ✔ Windows build available |
+| Wifite2 | ✘ Requires `airmon-ng` (Linux bash script) |
+| Protocol & Attack Reference | ✔ Full |
+| KRACK test scripts | ⚠ Requires Linux (hostapd/wpa_supplicant) |
+
+> **Note on Wifite2**: Wifite2 internally calls `airmon-ng` (a Linux bash
+> script) and cannot run natively on Windows.  WifiTool's individual workflow
+> menus replicate the same attack chains using Windows-native tools.
+
+---
+
+### Linux / Kali / Ubuntu / Debian
+
+##### 1. Install Python dependency
 
 ```bash
 pip3 install rich
@@ -65,21 +138,21 @@ pip3 install rich
 pip3 install -r requirements.txt
 ```
 
-### 2. Install Wi-Fi tools (Kali Linux / Ubuntu / Debian)
+#### 2. Install Wi-Fi tools (Kali Linux / Ubuntu / Debian)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y aircrack-ng hashcat hcxdumptool hcxtools bettercap wifite
 ```
 
-### 3. (Optional) Install KRACK test scripts
+#### 3. (Optional) Install KRACK test scripts
 
 ```bash
 git clone https://github.com/vanhoef/krackattacks-scripts /opt/krackattacks-scripts
 cd /opt/krackattacks-scripts && pip3 install -r requirements.txt
 ```
 
-### 4. (Optional) Install as a command
+#### 4. (Optional) Install as a command
 
 ```bash
 pip3 install -e .
@@ -92,11 +165,15 @@ wifitool
 ## Usage
 
 ```bash
-# Run directly (recommended: as root for capture operations)
+# Linux/macOS — run directly (recommended: as root for capture operations)
 sudo python3 main.py
 
-# Or if installed via pip
-sudo wifitool
+# Windows — run from an Administrator PowerShell
+python main.py
+
+# If installed via pip (any platform)
+wifitool          # Linux/macOS
+python -m wifi_tool.ui.app  # Windows alternative
 ```
 
 The tool detects which of the required tools are installed and shows their

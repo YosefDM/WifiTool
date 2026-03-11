@@ -6,20 +6,30 @@ GitHub: https://github.com/hashcat/hashcat
 import subprocess
 from typing import List, Optional, Tuple
 
-from .system import check_tool, run_command_live
+from .system import IS_WINDOWS, check_tool, run_command_live
 
 
 # ---------------------------------------------------------------------------
-# Capture conversion (hcxpcapngtool)
+# Capture conversion (hcxpcapngtool / pcap_utils fallback)
 # ---------------------------------------------------------------------------
 
 def convert_pcap(input_file: str, output_file: str) -> Tuple[bool, str]:
     """Convert a pcap/pcapng capture to hashcat hc22000 format.
 
-    hcxpcapngtool -o <output_file> <input_file>
+    On Linux/macOS uses ``hcxpcapngtool``::
+
+        hcxpcapngtool -o <output_file> <input_file>
+
+    On Windows (when ``hcxpcapngtool`` is not on PATH) uses the pure-Python
+    :func:`~wifi_tool.tools.pcap_utils.convert_pcap_to_hc22000` (scapy).
+
     GitHub (hcxtools): https://github.com/ZerBea/hcxtools
     Returns (success, output).
     """
+    if IS_WINDOWS and not check_tool("hcxpcapngtool"):
+        from .pcap_utils import convert_pcap_to_hc22000
+        return convert_pcap_to_hc22000(input_file, output_file)
+
     if not check_tool("hcxpcapngtool"):
         return False, "hcxpcapngtool not found — install hcxtools."
     try:
