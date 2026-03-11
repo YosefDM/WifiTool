@@ -74,11 +74,11 @@ set /p INSTALL_TOOLS="   Install these tools now? [Y/n]: "
 if /i not "%INSTALL_TOOLS%"=="n" (
     echo.
     echo   Installing aircrack-ng...
-    winget install --accept-package-agreements --accept-source-agreements aircrack-ng
+    winget install --id Aircrack-ng.Aircrack-ng --source winget --accept-package-agreements --accept-source-agreements
     echo   Installing hashcat...
-    winget install --accept-package-agreements --accept-source-agreements hashcat
+    winget install --id Hashcat.Hashcat --source winget --accept-package-agreements --accept-source-agreements
     echo   Installing Git...
-    winget install --id Git.Git --accept-package-agreements --accept-source-agreements
+    winget install --id Git.Git --source winget --accept-package-agreements --accept-source-agreements
     echo   Wi-Fi tools install commands completed.
     echo   (Some may already be installed or require a PATH refresh.)
 )
