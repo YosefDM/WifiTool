@@ -10,8 +10,19 @@ from typing import Dict, List, Optional, Tuple
 
 IS_WINDOWS: bool = platform.system() == "Windows"
 
-# Sentinel value used in TOOL_PACKAGES_WINDOWS for Linux-only tools
+# Sentinel value used in TOOL_PACKAGES_WINDOWS for tools that have no
+# viable native Windows equivalent.
 WINDOWS_NOT_AVAILABLE = "not available on Windows"
+
+# Download URL for Npcap — the Windows packet-capture library required by
+# airodump-ng, aireplay-ng, and monitor-mode support.
+NPCAP_DOWNLOAD_URL = "https://npcap.com/#download"
+
+# Candidate locations for Npcap's WlanHelper.exe (monitor-mode toggling)
+_NPCAP_WLANHELPER_PATHS: List[str] = [
+    r"C:\Windows\System32\Npcap\WlanHelper.exe",
+    r"C:\Program Files\Npcap\WlanHelper.exe",
+]
 
 # Maps tool executable name -> apt package to install it from (Linux/macOS)
 TOOL_PACKAGES: Dict[str, str] = {
@@ -28,20 +39,34 @@ TOOL_PACKAGES: Dict[str, str] = {
     "iw": "iw",
 }
 
-# Maps tool executable name -> winget/chocolatey package name (Windows)
-# Tools that are Linux-only are marked with WINDOWS_NOT_AVAILABLE.
+# Maps tool executable name -> winget/Chocolatey package name (Windows).
+#
+# airodump-ng and aireplay-ng are bundled in the official Windows build of
+# aircrack-ng and work natively with Npcap.
+#
+# airmon-ng is a Linux bash script; on Windows Npcap's WlanHelper.exe is
+# used instead to toggle monitor mode (see enable_monitor_mode).
+#
+# hcxdumptool and hcxpcapngtool have no Windows binaries; WifiTool provides
+# its own Python-native replacements (wifi_tool/tools/pcap_utils.py).
+#
+# wifite is a Python orchestrator that hard-codes calls to airmon-ng which
+# does not exist on Windows; it cannot run natively without modification.
+#
+# iw is a Linux kernel netlink tool; netsh covers the same use-cases on
+# Windows and is already used by get_wireless_interfaces().
 TOOL_PACKAGES_WINDOWS: Dict[str, str] = {
-    "airmon-ng": WINDOWS_NOT_AVAILABLE,
-    "airodump-ng": WINDOWS_NOT_AVAILABLE,
-    "aireplay-ng": WINDOWS_NOT_AVAILABLE,
-    "aircrack-ng": "aircrack-ng",
-    "hashcat": "hashcat",
-    "hcxdumptool": WINDOWS_NOT_AVAILABLE,
-    "hcxpcapngtool": WINDOWS_NOT_AVAILABLE,
-    "bettercap": "bettercap",
-    "wifite": WINDOWS_NOT_AVAILABLE,
-    "git": "Git.Git",
-    "iw": WINDOWS_NOT_AVAILABLE,
+    "airmon-ng":     WINDOWS_NOT_AVAILABLE,  # replaced by WlanHelper (Npcap)
+    "airodump-ng":   "aircrack-ng",          # bundled in Windows aircrack-ng
+    "aireplay-ng":   "aircrack-ng",          # bundled in Windows aircrack-ng
+    "aircrack-ng":   "aircrack-ng",
+    "hashcat":       "hashcat",
+    "hcxdumptool":   WINDOWS_NOT_AVAILABLE,  # replaced by pcap_utils (Python)
+    "hcxpcapngtool": WINDOWS_NOT_AVAILABLE,  # replaced by pcap_utils (Python)
+    "bettercap":     "bettercap",
+    "wifite":        WINDOWS_NOT_AVAILABLE,  # requires airmon-ng (Linux only)
+    "git":           "Git.Git",
+    "iw":            WINDOWS_NOT_AVAILABLE,  # replaced by netsh
 }
 
 # GitHub source repos for reference
@@ -64,6 +89,26 @@ def check_tool(name: str) -> bool:
 def get_all_tool_status() -> Dict[str, bool]:
     """Return a dict of {tool_name: is_installed} for every tracked tool."""
     return {tool: check_tool(tool) for tool in TOOL_PACKAGES}
+
+
+# ---------------------------------------------------------------------------
+# Npcap / WlanHelper helpers (Windows monitor mode)
+# ---------------------------------------------------------------------------
+
+def find_npcap_wlanhelper() -> Optional[str]:
+    """Return the absolute path to Npcap's ``WlanHelper.exe``, or ``None``.
+
+    WlanHelper is bundled with Npcap and provides monitor-mode toggling on
+    Windows, equivalent to ``airmon-ng start / stop`` on Linux.
+    Install Npcap from: https://npcap.com/#download
+    During installation check "Support raw 802.11 traffic (monitor mode)".
+    """
+    if not IS_WINDOWS:
+        return None
+    for p in _NPCAP_WLANHELPER_PATHS:
+        if Path(p).is_file():
+            return p
+    return shutil.which("WlanHelper")
 
 
 def is_root() -> bool:
@@ -181,17 +226,66 @@ def get_all_interfaces() -> List[str]:
         return []
 
 
-def enable_monitor_mode(interface: str) -> Tuple[bool, str]:
-    """Enable monitor mode on *interface* using airmon-ng.
+def _enable_monitor_mode_windows(interface: str) -> Tuple[bool, str]:
+    """Enable monitor mode on Windows using Npcap's WlanHelper.exe."""
+    helper = find_npcap_wlanhelper()
+    if not helper:
+        return False, (
+            "Npcap WlanHelper not found.\n"
+            f"  Install Npcap from {NPCAP_DOWNLOAD_URL}\n"
+            "  During installation check 'Support raw 802.11 traffic (monitor mode)'."
+        )
+    try:
+        result = subprocess.run(
+            [helper, interface, "mode", "monitor"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode == 0:
+            return True, interface
+        return False, output or "WlanHelper returned a non-zero exit code."
+    except subprocess.TimeoutExpired:
+        return False, "WlanHelper timed out."
+    except Exception as exc:
+        return False, str(exc)
 
-    Returns (success, monitor_interface_or_error_message).
-    Monitor mode is not supported on Windows.
+
+def _disable_monitor_mode_windows(interface: str) -> Tuple[bool, str]:
+    """Disable monitor mode on Windows using Npcap's WlanHelper.exe."""
+    helper = find_npcap_wlanhelper()
+    if not helper:
+        return False, (
+            f"Npcap WlanHelper not found. Install Npcap from {NPCAP_DOWNLOAD_URL}."
+        )
+    try:
+        result = subprocess.run(
+            [helper, interface, "mode", "managed"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return result.returncode == 0, output
+    except subprocess.TimeoutExpired:
+        return False, "WlanHelper timed out."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def enable_monitor_mode(interface: str) -> Tuple[bool, str]:
+    """Enable monitor mode on *interface*.
+
+    On Windows uses Npcap's ``WlanHelper.exe`` to put the adapter into
+    monitor (802.11) mode.  Npcap must be installed with
+    "Support raw 802.11 traffic" checked — see https://npcap.com/#download.
+
+    On Linux/macOS uses ``airmon-ng start``.
+    Returns (success, monitor_interface_name_or_error_message).
     """
     if IS_WINDOWS:
-        return False, (
-            "Monitor mode is not supported on Windows. "
-            "Use a Linux system or WSL for packet capture operations."
-        )
+        return _enable_monitor_mode_windows(interface)
     if not check_tool("airmon-ng"):
         return False, "airmon-ng not found — install aircrack-ng."
     try:
@@ -224,15 +318,13 @@ def enable_monitor_mode(interface: str) -> Tuple[bool, str]:
 
 
 def disable_monitor_mode(interface: str) -> Tuple[bool, str]:
-    """Disable monitor mode on *interface* using airmon-ng stop.
+    """Disable monitor mode on *interface*.
 
-    Monitor mode is not supported on Windows.
+    On Windows uses Npcap's ``WlanHelper.exe`` to restore managed mode.
+    On Linux/macOS uses ``airmon-ng stop``.
     """
     if IS_WINDOWS:
-        return False, (
-            "Monitor mode is not supported on Windows. "
-            "Use a Linux system or WSL for packet capture operations."
-        )
+        return _disable_monitor_mode_windows(interface)
     if not check_tool("airmon-ng"):
         return False, "airmon-ng not found."
     try:
@@ -248,12 +340,31 @@ def disable_monitor_mode(interface: str) -> Tuple[bool, str]:
 
 
 def kill_interfering_processes() -> str:
-    """Kill processes that interfere with monitor mode (airmon-ng check kill).
+    """Stop processes that interfere with monitor mode.
 
-    Not applicable on Windows.
+    On Windows: temporarily stops the WLAN AutoConfig service (wlansvc)
+    which holds the adapter in managed mode.  Remember to restart it
+    afterwards with ``net start wlansvc``.
+    On Linux: uses ``airmon-ng check kill``.
     """
     if IS_WINDOWS:
-        return "Not applicable on Windows — monitor mode is not supported."
+        try:
+            result = subprocess.run(
+                ["net", "stop", "wlansvc"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            output = (result.stdout + result.stderr).strip()
+            if result.returncode == 0:
+                return (
+                    output + "\n"
+                    "WLAN AutoConfig stopped. Re-enable after capture with: "
+                    "net start wlansvc"
+                )
+            return output
+        except Exception as exc:
+            return str(exc)
     if not check_tool("airmon-ng"):
         return "airmon-ng not found."
     try:
@@ -372,7 +483,7 @@ def scan_networks_windows() -> List[Dict[str, str]]:
 
             # "SSID 1 : MyNetwork" starts a new network block.
             # Guard against matching "BSSID …" lines with the same prefix check.
-            if upper.startswith("SSID") and not upper.startswith("BSSID") and ":" in stripped:
+            if upper.startswith("SSID") and ":" in stripped:
                 if current:
                     networks.append(current)
                 current = {}

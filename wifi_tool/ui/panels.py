@@ -11,12 +11,19 @@ from ..data.protocols import ALL_PROTOCOLS, PROTOCOL_COMPARISON
 from ..data.attacks import ALL_ATTACKS
 from ..tools.system import (
     IS_WINDOWS,
+    NPCAP_DOWNLOAD_URL,
     TOOL_PACKAGES,
     TOOL_PACKAGES_WINDOWS,
     TOOL_REPOS,
     WINDOWS_NOT_AVAILABLE,
+    find_npcap_wlanhelper,
     get_all_tool_status,
 )
+
+
+def _npcap_available() -> bool:
+    """Return True if Npcap's WlanHelper.exe is found on this Windows system."""
+    return find_npcap_wlanhelper() is not None
 
 BANNER = r"""
  __        ___  __ _  _____           _
@@ -47,6 +54,11 @@ def render_tool_status(console: Console) -> None:
     active_packages = TOOL_PACKAGES_WINDOWS if IS_WINDOWS else TOOL_PACKAGES
     pkg_label = "winget / Chocolatey package" if IS_WINDOWS else "apt package"
 
+    # Tools replaced by the Python pcap_utils module on Windows
+    _PYTHON_NATIVE_WINDOWS = {"hcxdumptool", "hcxpcapngtool"}
+    # Tool replaced by WlanHelper on Windows
+    _WLANHELPER_TOOLS = {"airmon-ng"}
+
     table = Table(
         title="Installed Tools",
         box=box.ROUNDED,
@@ -55,7 +67,7 @@ def render_tool_status(console: Console) -> None:
         header_style="bold cyan",
     )
     table.add_column("Tool", style="bold white", min_width=16)
-    table.add_column("Status", min_width=12)
+    table.add_column("Status", min_width=18)
     table.add_column(pkg_label, style="dim", min_width=14)
     table.add_column("GitHub Source", style="dim")
 
@@ -73,7 +85,17 @@ def render_tool_status(console: Console) -> None:
         win_pkg = active_packages.get(tool, apt_pkg)
         display_pkg = win_pkg if IS_WINDOWS else apt_pkg
 
-        if IS_WINDOWS and win_pkg == WINDOWS_NOT_AVAILABLE:
+        if IS_WINDOWS and tool in _PYTHON_NATIVE_WINDOWS:
+            status_text = Text("✔ Python/scapy", style="green bold")
+            display_pkg = "scapy (pip install scapy)"
+        elif IS_WINDOWS and tool in _WLANHELPER_TOOLS:
+            helper_ok = _npcap_available()
+            if helper_ok:
+                status_text = Text("✔ via WlanHelper", style="green bold")
+            else:
+                status_text = Text("✘ Npcap needed", style="yellow bold")
+            display_pkg = f"Npcap — {NPCAP_DOWNLOAD_URL}"
+        elif IS_WINDOWS and win_pkg == WINDOWS_NOT_AVAILABLE:
             status_text = Text("— Linux only", style="dim")
         elif installed:
             status_text = Text("✔ installed", style="green bold")

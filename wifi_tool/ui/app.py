@@ -87,7 +87,15 @@ def _require_root() -> bool:
 
 
 def _require_tool(name: str, package: Optional[str] = None) -> bool:
-    """Check that *name* is installed; offer installation if not."""
+    """Check that *name* is installed; offer installation if not.
+
+    On Windows, hcxdumptool and hcxpcapngtool are replaced by pure-Python
+    implementations (scapy) and never need external binaries.
+    """
+    # These are handled natively on Windows via pcap_utils (scapy).
+    if system.IS_WINDOWS and name in ("hcxdumptool", "hcxpcapngtool"):
+        return True
+
     if system.check_tool(name):
         return True
 
@@ -95,9 +103,10 @@ def _require_tool(name: str, package: Optional[str] = None) -> bool:
         win_pkg = system.TOOL_PACKAGES_WINDOWS.get(name, "")
         if win_pkg == system.WINDOWS_NOT_AVAILABLE:
             console.print(
-                f"[red]✘ {name} is not available on Windows.[/red]\n"
-                f"  This tool is Linux-only. "
-                f"Consider using WSL (Windows Subsystem for Linux) or a Linux VM."
+                f"[red]✘ {name} is not available natively on Windows.[/red]\n"
+                f"  This tool requires Linux.\n"
+                f"  Use the individual WifiTool workflow menus which call "
+                f"Windows-native equivalents."
             )
             return False
         pkg = win_pkg or package or name
@@ -178,12 +187,23 @@ def menu_system_setup() -> None:
     render_tool_status(console)
     console.print()
 
+    kill_label = (
+        "[4] Stop WLAN AutoConfig service (releases adapter for monitor mode)\n"
+        if system.IS_WINDOWS
+        else "[4] Kill interfering processes (airmon-ng check kill)\n"
+    )
+    monitor_hint = (
+        " (requires Npcap with 'raw 802.11 traffic' support)"
+        if system.IS_WINDOWS
+        else ""
+    )
+
     while True:
         console.print(
-            "[1] List wireless interfaces\n"
-            "[2] Enable monitor mode\n"
-            "[3] Disable monitor mode\n"
-            "[4] Kill interfering processes (airmon-ng check kill)\n"
+            f"[1] List wireless interfaces\n"
+            f"[2] Enable monitor mode{monitor_hint}\n"
+            f"[3] Disable monitor mode{monitor_hint}\n"
+            f"{kill_label}"
             "[5] Install missing tools\n"
             "[0] Back\n"
         )
@@ -206,13 +226,21 @@ def menu_system_setup() -> None:
             if not _require_root():
                 _pause()
                 continue
-            if not _require_tool("airmon-ng"):
+            # On Windows, WlanHelper (Npcap) handles monitor mode natively;
+            # airmon-ng is only required on Linux/macOS.
+            if not system.IS_WINDOWS and not _require_tool("airmon-ng"):
                 _pause()
                 continue
             iface = _pick_interface(monitor_preferred=False)
             if not iface:
                 continue
-            console.print(f"[cyan]Enabling monitor mode on {iface}...[/cyan]")
+            if system.IS_WINDOWS:
+                console.print(
+                    f"[cyan]Enabling monitor mode on {iface!r} "
+                    f"via Npcap WlanHelper...[/cyan]"
+                )
+            else:
+                console.print(f"[cyan]Enabling monitor mode on {iface}...[/cyan]")
             ok, result = system.enable_monitor_mode(iface)
             if ok:
                 console.print(f"[green]✔ Monitor mode enabled → {result}[/green]")
@@ -237,7 +265,13 @@ def menu_system_setup() -> None:
             if not _require_root():
                 _pause()
                 continue
-            console.print("[cyan]Killing interfering processes...[/cyan]")
+            if system.IS_WINDOWS:
+                console.print(
+                    "[cyan]Stopping WLAN AutoConfig service "
+                    "(releases the adapter for monitor mode)...[/cyan]"
+                )
+            else:
+                console.print("[cyan]Killing interfering processes...[/cyan]")
             out = system.kill_interfering_processes()
             console.print(out)
             _pause()
@@ -257,8 +291,12 @@ def menu_system_setup() -> None:
                     for tool in missing:
                         pkg = packages.get(tool, tool)
                         if pkg == system.WINDOWS_NOT_AVAILABLE:
+                            # Silently skip tools that are Python-native on Windows
+                            if system.IS_WINDOWS and tool in ("hcxdumptool", "hcxpcapngtool"):
+                                continue
                             console.print(
-                                f"[dim]{tool} — not available on Windows (Linux only)[/dim]"
+                                f"[dim]{tool} — not available on Windows "
+                                f"(Linux only)[/dim]"
                             )
                             continue
                         if Confirm.ask(f"Install [bold]{pkg}[/bold]?", default=True):
@@ -315,8 +353,8 @@ def _windows_network_scan() -> None:
     console.print(table)
     console.print(
         f"\n[dim]{len(networks)} network(s) found.[/dim]\n"
-        "[yellow]Note: Deep packet capture requires Linux tools "
-        "(airodump-ng). Use WSL or a Linux system for capture workflows.[/yellow]"
+        "[dim]For a full packet capture use Option 2 (airodump-ng) "
+        "after enabling monitor mode.[/dim]"
     )
     _pause()
 
@@ -326,7 +364,37 @@ def menu_network_discovery() -> None:
 
     if system.IS_WINDOWS:
         _heading("Network Discovery")
-        _windows_network_scan()
+        console.print(
+            "[1] Quick scan — netsh (no monitor mode required)\n"
+            "[2] Full scan — airodump-ng (requires monitor mode + aircrack-ng installed)\n"
+            "[0] Back\n"
+        )
+        choice = Prompt.ask("Select", choices=["0", "1", "2"])
+        if choice == "0":
+            return
+        if choice == "1":
+            _windows_network_scan()
+        elif choice == "2":
+            if not _require_root():
+                _pause()
+                return
+            if not _require_tool("airodump-ng"):
+                _pause()
+                return
+            # Fall through to the airodump-ng workflow below
+            _heading("Network Discovery — airodump-ng")
+            iface = _pick_interface()
+            if not iface:
+                return
+            out_dir = _pick_output_dir()
+            prefix = str(out_dir / "scan")
+            console.print(
+                f"\n[cyan]Starting airodump-ng on {iface} "
+                f"(output → {prefix}-*.csv/pcap)...[/cyan]\n"
+                "[dim]Press Ctrl+C when done scanning.[/dim]\n"
+            )
+            aircrack.scan_networks(iface, prefix)
+            _pause()
         return
 
     _heading("Network Discovery — airodump-ng")
@@ -960,11 +1028,23 @@ def menu_wifite() -> None:
     if system.IS_WINDOWS:
         console.print(
             Panel(
-                "[bold yellow]Wifite2 is not available on Windows.[/bold yellow]\n\n"
-                "Wifite2 requires Linux-specific tools (airmon-ng, airodump-ng) and "
-                "relies on monitor mode, which is not supported on Windows.\n\n"
-                "[dim]To use Wifite2, run WifiTool on Linux, or install "
-                "WSL (Windows Subsystem for Linux) and run it there.[/dim]",
+                "[bold yellow]Wifite2 cannot run natively on Windows.[/bold yellow]\n\n"
+                "Wifite2 is a Python orchestrator that internally calls "
+                "[bold]airmon-ng[/bold] (a Linux bash script) to manage "
+                "monitor mode.  There is no direct Windows replacement for "
+                "airmon-ng.\n\n"
+                "You can perform the same attacks step-by-step using "
+                "WifiTool's individual menus, which all use Windows-native "
+                "tools:\n\n"
+                "  [cyan]System Setup[/cyan]        → Enable monitor mode "
+                "(Npcap WlanHelper)\n"
+                "  [cyan]Network Discovery[/cyan]   → airodump-ng scan\n"
+                "  [cyan]WEP Analysis[/cyan]        → airodump-ng + aireplay-ng "
+                "+ aircrack-ng\n"
+                "  [cyan]WPA/WPA2 Attack[/cyan]     → airodump-ng + aireplay-ng "
+                "+ hashcat\n"
+                "  [cyan]PMKID Attack[/cyan]        → scapy capture "
+                "(pcap_utils) + hashcat",
                 border_style="yellow",
                 padding=(1, 2),
             )

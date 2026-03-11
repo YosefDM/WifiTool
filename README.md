@@ -65,55 +65,66 @@ than simulating them.
 winget install Python.Python.3
 ```
 
-#### 2. Install WifiTool Python dependency
+#### 2. Install WifiTool dependencies
 
 ```powershell
-pip install rich
-# or
 pip install -r requirements.txt
+# (installs rich and scapy — scapy powers the Windows-native capture tools)
 ```
 
-#### 3. Install available tools (Run PowerShell as Administrator)
+#### 3. Install Npcap (required for monitor mode and packet capture)
+
+Download and install Npcap from **https://npcap.com/#download**.
+During installation check **"Support raw 802.11 traffic (monitor mode)"**.
+
+Npcap provides:
+- The packet-capture driver used by `airodump-ng.exe` and `aireplay-ng.exe`
+- `WlanHelper.exe` — used by WifiTool to enable/disable monitor mode on Windows
+  (replaces `airmon-ng`)
+
+#### 4. Install aircrack-ng and optional tools (Administrator PowerShell)
 
 ```powershell
-# hashcat — GPU-accelerated password cracking (fully supported on Windows)
-winget install hashcat
-
-# aircrack-ng — CPU-based cracking (partial Windows support; capture requires Linux)
+# aircrack-ng Windows build — includes airodump-ng.exe and aireplay-ng.exe
 winget install aircrack-ng
+
+# hashcat — GPU-accelerated password cracking
+winget install hashcat
 
 # git — needed to clone KRACK test scripts
 winget install Git.Git
 
-# bettercap (optional, partial Windows support)
+# bettercap (optional)
 choco install bettercap
 ```
 
-> **Note:** `hcxdumptool`, `hcxpcapngtool`, `wifite`, and `airmon-ng` are
-> **Linux-only** tools.  On Windows, WifiTool detects this automatically and
-> marks them as unavailable.  Use WSL (Windows Subsystem for Linux) or a
-> Linux VM/live USB for full packet-capture workflows.
-
-#### 4. Run WifiTool
+#### 5. Run WifiTool
 
 ```powershell
 # From an Administrator PowerShell (right-click → Run as administrator):
 python main.py
 ```
 
-#### Windows-specific features
+#### Windows feature availability
 
 | Feature | Windows support |
 |---|---|
-| Network Discovery | ✔ Native (via `netsh wlan show networks`) |
+| Network Discovery (quick) | ✔ Native — `netsh wlan show networks` |
+| Network Discovery (full) | ✔ `airodump-ng.exe` + Npcap (monitor mode) |
+| Monitor mode enable/disable | ✔ Npcap `WlanHelper.exe` (replaces `airmon-ng`) |
+| airodump-ng / aireplay-ng | ✔ Windows aircrack-ng build + Npcap |
+| aircrack-ng cracking | ✔ Full |
 | hashcat cracking | ✔ Full (GPU-accelerated) |
-| aircrack-ng cracking | ✔ CPU mode (for pre-captured files) |
-| Monitor mode / packet capture | ✘ Not supported — use WSL or Linux |
-| airodump-ng / aireplay-ng | ✘ Linux only |
-| hcxdumptool / hcxpcapngtool | ✘ Linux only |
-| Wifite2 | ✘ Linux only |
+| hcxdumptool (PMKID capture) | ✔ Python/scapy replacement (pcap_utils) |
+| hcxpcapngtool (pcap→hc22000) | ✔ Python/scapy replacement (pcap_utils) |
+| bettercap | ✔ Windows build available |
+| Wifite2 | ✘ Requires `airmon-ng` (Linux bash script) |
 | Protocol & Attack Reference | ✔ Full |
 | KRACK test scripts | ⚠ Requires Linux (hostapd/wpa_supplicant) |
+
+> **Note on Wifite2**: Wifite2 internally calls `airmon-ng` (a Linux bash
+> script) and cannot run natively on Windows.  WifiTool's individual workflow
+> menus replicate the same attack chains using Windows-native tools.
 
 ---
 
