@@ -56,17 +56,17 @@ TOOL_PACKAGES: Dict[str, str] = {
 # iw is a Linux kernel netlink tool; netsh covers the same use-cases on
 # Windows and is already used by get_wireless_interfaces().
 TOOL_PACKAGES_WINDOWS: Dict[str, str] = {
-    "airmon-ng":     WINDOWS_NOT_AVAILABLE,  # replaced by WlanHelper (Npcap)
-    "airodump-ng":   "aircrack-ng",          # bundled in Windows aircrack-ng
-    "aireplay-ng":   "aircrack-ng",          # bundled in Windows aircrack-ng
-    "aircrack-ng":   "aircrack-ng",
-    "hashcat":       "hashcat",
-    "hcxdumptool":   WINDOWS_NOT_AVAILABLE,  # replaced by pcap_utils (Python)
-    "hcxpcapngtool": WINDOWS_NOT_AVAILABLE,  # replaced by pcap_utils (Python)
+    "airmon-ng":     WINDOWS_NOT_AVAILABLE,         # replaced by WlanHelper (Npcap)
+    "airodump-ng":   "Aircrack-ng.Aircrack-ng",     # bundled in Windows aircrack-ng
+    "aireplay-ng":   "Aircrack-ng.Aircrack-ng",     # bundled in Windows aircrack-ng
+    "aircrack-ng":   "Aircrack-ng.Aircrack-ng",
+    "hashcat":       "Hashcat.Hashcat",
+    "hcxdumptool":   WINDOWS_NOT_AVAILABLE,         # replaced by pcap_utils (Python)
+    "hcxpcapngtool": WINDOWS_NOT_AVAILABLE,         # replaced by pcap_utils (Python)
     "bettercap":     "bettercap",
-    "wifite":        WINDOWS_NOT_AVAILABLE,  # requires airmon-ng (Linux only)
+    "wifite":        WINDOWS_NOT_AVAILABLE,         # requires airmon-ng (Linux only)
     "git":           "Git.Git",
-    "iw":            WINDOWS_NOT_AVAILABLE,  # replaced by netsh
+    "iw":            WINDOWS_NOT_AVAILABLE,         # replaced by netsh
 }
 
 # GitHub source repos for reference
