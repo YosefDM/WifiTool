@@ -57,7 +57,69 @@ than simulating them.
 
 ## Installation
 
-### 1. Install Python dependency
+### Windows 11
+
+#### 1. Install Python (if not already installed)
+
+```powershell
+winget install Python.Python.3
+```
+
+#### 2. Install WifiTool Python dependency
+
+```powershell
+pip install rich
+# or
+pip install -r requirements.txt
+```
+
+#### 3. Install available tools (Run PowerShell as Administrator)
+
+```powershell
+# hashcat — GPU-accelerated password cracking (fully supported on Windows)
+winget install hashcat
+
+# aircrack-ng — CPU-based cracking (partial Windows support; capture requires Linux)
+winget install aircrack-ng
+
+# git — needed to clone KRACK test scripts
+winget install Git.Git
+
+# bettercap (optional, partial Windows support)
+choco install bettercap
+```
+
+> **Note:** `hcxdumptool`, `hcxpcapngtool`, `wifite`, and `airmon-ng` are
+> **Linux-only** tools.  On Windows, WifiTool detects this automatically and
+> marks them as unavailable.  Use WSL (Windows Subsystem for Linux) or a
+> Linux VM/live USB for full packet-capture workflows.
+
+#### 4. Run WifiTool
+
+```powershell
+# From an Administrator PowerShell (right-click → Run as administrator):
+python main.py
+```
+
+#### Windows-specific features
+
+| Feature | Windows support |
+|---|---|
+| Network Discovery | ✔ Native (via `netsh wlan show networks`) |
+| hashcat cracking | ✔ Full (GPU-accelerated) |
+| aircrack-ng cracking | ✔ CPU mode (for pre-captured files) |
+| Monitor mode / packet capture | ✘ Not supported — use WSL or Linux |
+| airodump-ng / aireplay-ng | ✘ Linux only |
+| hcxdumptool / hcxpcapngtool | ✘ Linux only |
+| Wifite2 | ✘ Linux only |
+| Protocol & Attack Reference | ✔ Full |
+| KRACK test scripts | ⚠ Requires Linux (hostapd/wpa_supplicant) |
+
+---
+
+### Linux / Kali / Ubuntu / Debian
+
+##### 1. Install Python dependency
 
 ```bash
 pip3 install rich
@@ -65,21 +127,21 @@ pip3 install rich
 pip3 install -r requirements.txt
 ```
 
-### 2. Install Wi-Fi tools (Kali Linux / Ubuntu / Debian)
+#### 2. Install Wi-Fi tools (Kali Linux / Ubuntu / Debian)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y aircrack-ng hashcat hcxdumptool hcxtools bettercap wifite
 ```
 
-### 3. (Optional) Install KRACK test scripts
+#### 3. (Optional) Install KRACK test scripts
 
 ```bash
 git clone https://github.com/vanhoef/krackattacks-scripts /opt/krackattacks-scripts
 cd /opt/krackattacks-scripts && pip3 install -r requirements.txt
 ```
 
-### 4. (Optional) Install as a command
+#### 4. (Optional) Install as a command
 
 ```bash
 pip3 install -e .
@@ -92,11 +154,15 @@ wifitool
 ## Usage
 
 ```bash
-# Run directly (recommended: as root for capture operations)
+# Linux/macOS — run directly (recommended: as root for capture operations)
 sudo python3 main.py
 
-# Or if installed via pip
-sudo wifitool
+# Windows — run from an Administrator PowerShell
+python main.py
+
+# If installed via pip (any platform)
+wifitool          # Linux/macOS
+python -m wifi_tool.ui.app  # Windows alternative
 ```
 
 The tool detects which of the required tools are installed and shows their

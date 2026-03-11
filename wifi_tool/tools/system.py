@@ -1,13 +1,19 @@
 """System utilities: interface management, monitor mode, tool detection."""
 
 import os
+import platform
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-# Maps tool executable name -> apt package to install it from
+IS_WINDOWS: bool = platform.system() == "Windows"
+
+# Sentinel value used in TOOL_PACKAGES_WINDOWS for Linux-only tools
+WINDOWS_NOT_AVAILABLE = "not available on Windows"
+
+# Maps tool executable name -> apt package to install it from (Linux/macOS)
 TOOL_PACKAGES: Dict[str, str] = {
     "airmon-ng": "aircrack-ng",
     "airodump-ng": "aircrack-ng",
@@ -20,6 +26,22 @@ TOOL_PACKAGES: Dict[str, str] = {
     "wifite": "wifite",
     "git": "git",
     "iw": "iw",
+}
+
+# Maps tool executable name -> winget/chocolatey package name (Windows)
+# Tools that are Linux-only are marked with WINDOWS_NOT_AVAILABLE.
+TOOL_PACKAGES_WINDOWS: Dict[str, str] = {
+    "airmon-ng": WINDOWS_NOT_AVAILABLE,
+    "airodump-ng": WINDOWS_NOT_AVAILABLE,
+    "aireplay-ng": WINDOWS_NOT_AVAILABLE,
+    "aircrack-ng": "aircrack-ng",
+    "hashcat": "hashcat",
+    "hcxdumptool": WINDOWS_NOT_AVAILABLE,
+    "hcxpcapngtool": WINDOWS_NOT_AVAILABLE,
+    "bettercap": "bettercap",
+    "wifite": WINDOWS_NOT_AVAILABLE,
+    "git": "Git.Git",
+    "iw": WINDOWS_NOT_AVAILABLE,
 }
 
 # GitHub source repos for reference
@@ -45,12 +67,45 @@ def get_all_tool_status() -> Dict[str, bool]:
 
 
 def is_root() -> bool:
-    """Return True when running as root (uid 0)."""
+    """Return True when running with elevated privileges.
+
+    On Windows this checks for Administrator status; on Unix it checks uid 0.
+    """
+    if IS_WINDOWS:
+        try:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
     return os.geteuid() == 0
+
+
+def _get_wireless_interfaces_windows() -> List[str]:
+    """Return wireless interface names on Windows using ``netsh``."""
+    try:
+        result = subprocess.run(
+            ["netsh", "wlan", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        interfaces: List[str] = []
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("name") and ":" in stripped:
+                name = stripped.split(":", 1)[1].strip()
+                if name:
+                    interfaces.append(name)
+        return interfaces
+    except Exception:
+        return []
 
 
 def get_wireless_interfaces() -> List[str]:
     """Return a list of wireless interface names detected on the system."""
+    if IS_WINDOWS:
+        return _get_wireless_interfaces_windows()
+
     interfaces: List[str] = []
 
     # Primary method: iw dev
@@ -83,8 +138,31 @@ def get_wireless_interfaces() -> List[str]:
     return interfaces
 
 
+def _get_all_interfaces_windows() -> List[str]:
+    """Return all network interface names on Windows using ``netsh``."""
+    try:
+        result = subprocess.run(
+            ["netsh", "interface", "show", "interface"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        interfaces: List[str] = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            # Lines look like: "Enabled    Connected    Dedicated    Wi-Fi"
+            if len(parts) >= 4 and parts[0] in ("Enabled", "Disabled"):
+                interfaces.append(" ".join(parts[3:]))
+        return interfaces
+    except Exception:
+        return []
+
+
 def get_all_interfaces() -> List[str]:
     """Return all network interface names (wired + wireless)."""
+    if IS_WINDOWS:
+        return _get_all_interfaces_windows()
+
     try:
         result = subprocess.run(
             ["ip", "link", "show"],
@@ -107,7 +185,13 @@ def enable_monitor_mode(interface: str) -> Tuple[bool, str]:
     """Enable monitor mode on *interface* using airmon-ng.
 
     Returns (success, monitor_interface_or_error_message).
+    Monitor mode is not supported on Windows.
     """
+    if IS_WINDOWS:
+        return False, (
+            "Monitor mode is not supported on Windows. "
+            "Use a Linux system or WSL for packet capture operations."
+        )
     if not check_tool("airmon-ng"):
         return False, "airmon-ng not found — install aircrack-ng."
     try:
@@ -140,7 +224,15 @@ def enable_monitor_mode(interface: str) -> Tuple[bool, str]:
 
 
 def disable_monitor_mode(interface: str) -> Tuple[bool, str]:
-    """Disable monitor mode on *interface* using airmon-ng stop."""
+    """Disable monitor mode on *interface* using airmon-ng stop.
+
+    Monitor mode is not supported on Windows.
+    """
+    if IS_WINDOWS:
+        return False, (
+            "Monitor mode is not supported on Windows. "
+            "Use a Linux system or WSL for packet capture operations."
+        )
     if not check_tool("airmon-ng"):
         return False, "airmon-ng not found."
     try:
@@ -156,7 +248,12 @@ def disable_monitor_mode(interface: str) -> Tuple[bool, str]:
 
 
 def kill_interfering_processes() -> str:
-    """Kill processes that interfere with monitor mode (airmon-ng check kill)."""
+    """Kill processes that interfere with monitor mode (airmon-ng check kill).
+
+    Not applicable on Windows.
+    """
+    if IS_WINDOWS:
+        return "Not applicable on Windows — monitor mode is not supported."
     if not check_tool("airmon-ng"):
         return "airmon-ng not found."
     try:
@@ -171,8 +268,41 @@ def kill_interfering_processes() -> str:
         return str(exc)
 
 
+def _install_tool_windows(package: str) -> Tuple[bool, str]:
+    """Install *package* on Windows using winget (primary) or chocolatey (fallback)."""
+    if not is_root():
+        return False, "Administrator privileges required for installation."
+    for mgr, cmd in [
+        ("winget", ["winget", "install", "--accept-source-agreements",
+                    "--accept-package-agreements", package]),
+        ("choco", ["choco", "install", "-y", package]),
+    ]:
+        if shutil.which(mgr):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                return result.returncode == 0, (result.stdout + result.stderr).strip()
+            except Exception as exc:
+                return False, str(exc)
+    return (
+        False,
+        "No supported package manager found. "
+        "Install winget (built into Windows 11) or Chocolatey (https://chocolatey.org).",
+    )
+
+
 def install_tool(package: str) -> Tuple[bool, str]:
-    """Install *package* via apt-get (requires root)."""
+    """Install *package* using the platform package manager.
+
+    On Windows uses winget or chocolatey; on Linux/macOS uses apt-get.
+    Requires elevated privileges in both cases.
+    """
+    if IS_WINDOWS:
+        return _install_tool_windows(package)
     if not is_root():
         return False, "Root privileges required for installation."
     try:
@@ -210,3 +340,75 @@ def stream_command(cmd: List[str]) -> Tuple[int, str]:
         return 1, f"Command timed out: {exc}"
     except Exception as exc:
         return 1, str(exc)
+
+
+def scan_networks_windows() -> List[Dict[str, str]]:
+    """Scan for nearby Wi-Fi networks on Windows using ``netsh wlan show networks``.
+
+    Returns a list of dicts with keys: SSID, BSSID, Signal, Channel, Auth,
+    Cipher, Radio.  Only available on Windows.
+    """
+    try:
+        result = subprocess.run(
+            ["netsh", "wlan", "show", "networks", "mode=bssid"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        networks: List[Dict[str, str]] = []
+        current: Dict[str, str] = {}
+        bssid_idx = 0
+
+        def _after_colon(s: str) -> str:
+            """Return the trimmed value after the first colon in *s*."""
+            return s.split(":", 1)[1].strip()
+
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            upper = stripped.upper()
+
+            # "SSID 1 : MyNetwork" starts a new network block.
+            # Guard against matching "BSSID …" lines with the same prefix check.
+            if upper.startswith("SSID") and not upper.startswith("BSSID") and ":" in stripped:
+                if current:
+                    networks.append(current)
+                current = {}
+                bssid_idx = 0
+                current["SSID"] = _after_colon(stripped)
+
+            elif upper.startswith("BSSID") and ":" in stripped:
+                # Only record the first BSSID per SSID block
+                if bssid_idx == 0:
+                    # _after_colon splits only on the first colon, preserving
+                    # the remaining colons that are part of the MAC address.
+                    current["BSSID"] = _after_colon(stripped)
+                bssid_idx += 1
+
+            elif stripped.lower().startswith("signal") and ":" in stripped:
+                if bssid_idx <= 1:
+                    current["Signal"] = _after_colon(stripped)
+
+            elif stripped.lower().startswith("radio type") and ":" in stripped:
+                if bssid_idx <= 1:
+                    current["Radio"] = _after_colon(stripped)
+
+            elif stripped.lower().startswith("channel") and ":" in stripped:
+                if bssid_idx <= 1:
+                    current["Channel"] = _after_colon(stripped)
+
+            elif stripped.lower().startswith("authentication") and ":" in stripped:
+                current["Auth"] = _after_colon(stripped)
+
+            elif stripped.lower().startswith("encryption") and ":" in stripped:
+                if "Cipher" not in current:
+                    current["Cipher"] = _after_colon(stripped)
+
+        if current:
+            networks.append(current)
+
+        return networks
+    except Exception:
+        return []

@@ -12,6 +12,7 @@ nonce counter upon receiving a retransmitted message 3.
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -26,6 +27,9 @@ SEARCH_DIRS: List[str] = [
     os.path.expanduser("~/krackattacks-scripts"),
     "/usr/local/share/krackattacks-scripts",
     "/usr/share/krackattacks-scripts",
+    # Windows paths
+    os.path.expanduser("~/Documents/krackattacks-scripts"),
+    r"C:\Tools\krackattacks-scripts",
 ]
 
 # Relative paths of the main test script inside the repo
@@ -61,7 +65,7 @@ def find_script() -> Optional[str]:
 def check_dependencies() -> dict:
     """Check that the KRACK test script dependencies are present."""
     return {
-        "python3": check_tool("python3"),
+        "python3": check_tool("python3") or check_tool("python"),
         "hostapd": check_tool("hostapd"),
         "wpa_supplicant": check_tool("wpa_supplicant"),
         "git": check_tool("git"),
@@ -96,7 +100,7 @@ def clone_repo(target_dir: Optional[str] = None) -> Tuple[bool, str]:
 def install_requirements(repo_dir: Optional[str] = None) -> Tuple[bool, str]:
     """Install Python requirements for krackattacks-scripts.
 
-    pip3 install -r requirements.txt
+    Uses the current Python interpreter's pip to ensure compatibility.
     """
     base = repo_dir or find_repo()
     if base is None:
@@ -106,7 +110,7 @@ def install_requirements(repo_dir: Optional[str] = None) -> Tuple[bool, str]:
         return False, f"requirements.txt not found in {base}."
     try:
         result = subprocess.run(
-            ["pip3", "install", "-r", req_file],
+            [sys.executable, "-m", "pip", "install", "-r", req_file],
             capture_output=True,
             text=True,
             timeout=120,
@@ -121,7 +125,7 @@ def run_test(interface: str,
              extra_args: Optional[List[str]] = None) -> int:
     """Run the KRACK client test script against a target device.
 
-    python3 krack-test-client.py <interface> [target_mac] [extra_args]
+    python krack-test-client.py <interface> [target_mac] [extra_args]
 
     The script sets up a rogue AP clone, positions itself as MITM, and
     detects nonce reinstallation by observing whether the target resets
@@ -135,7 +139,7 @@ def run_test(interface: str,
             "KRACK test scripts not found.\n"
             f"Clone with: git clone {REPO_URL}"
         )
-    cmd = ["python3", script, interface]
+    cmd = [sys.executable, script, interface]
     if target_mac:
         cmd.append(target_mac)
     if extra_args:

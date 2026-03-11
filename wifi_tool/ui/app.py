@@ -61,23 +61,62 @@ def _heading(title: str, color: str = "cyan") -> None:
 
 def _require_root() -> bool:
     if not system.is_root():
-        console.print(
-            Panel(
-                "[bold red]Root privileges required.[/bold red]\n\n"
-                "Most Wi-Fi tools (airmon-ng, airodump-ng, hcxdumptool, etc.) "
-                "require root to manipulate network interfaces.\n\n"
-                "Re-run with: [bold]sudo wifitool[/bold]",
-                border_style="red",
+        if system.IS_WINDOWS:
+            console.print(
+                Panel(
+                    "[bold red]Administrator privileges required.[/bold red]\n\n"
+                    "Most Wi-Fi tools require administrator privileges to manipulate "
+                    "network interfaces.\n\n"
+                    "Re-run as Administrator: right-click the terminal (or PowerShell) "
+                    "and select [bold]'Run as administrator'[/bold], then re-run wifitool.",
+                    border_style="red",
+                )
             )
-        )
+        else:
+            console.print(
+                Panel(
+                    "[bold red]Root privileges required.[/bold red]\n\n"
+                    "Most Wi-Fi tools (airmon-ng, airodump-ng, hcxdumptool, etc.) "
+                    "require root to manipulate network interfaces.\n\n"
+                    "Re-run with: [bold]sudo wifitool[/bold]",
+                    border_style="red",
+                )
+            )
         return False
     return True
 
 
 def _require_tool(name: str, package: Optional[str] = None) -> bool:
-    """Check that *name* is installed; offer apt-get install if not."""
+    """Check that *name* is installed; offer installation if not."""
     if system.check_tool(name):
         return True
+
+    if system.IS_WINDOWS:
+        win_pkg = system.TOOL_PACKAGES_WINDOWS.get(name, "")
+        if win_pkg == system.WINDOWS_NOT_AVAILABLE:
+            console.print(
+                f"[red]✘ {name} is not available on Windows.[/red]\n"
+                f"  This tool is Linux-only. "
+                f"Consider using WSL (Windows Subsystem for Linux) or a Linux VM."
+            )
+            return False
+        pkg = win_pkg or package or name
+        console.print(
+            f"[red]✘ {name} is not installed.[/red]\n"
+            f"  Install with winget: [bold cyan]winget install {pkg}[/bold cyan]\n"
+            f"  Or with Chocolatey:  [bold cyan]choco install {pkg}[/bold cyan]"
+        )
+        if system.is_root():
+            if Confirm.ask(f"Install [bold]{pkg}[/bold] now?", default=False):
+                ok, out = system.install_tool(pkg)
+                console.print(out)
+                if ok:
+                    console.print(f"[green]✔ {pkg} installed.[/green]")
+                    return True
+                else:
+                    console.print(f"[red]Installation failed.[/red]")
+        return False
+
     pkg = package or system.TOOL_PACKAGES.get(name, name)
     console.print(
         f"[red]✘ {name} is not installed.[/red]\n"
@@ -210,9 +249,18 @@ def menu_system_setup() -> None:
                 console.print("[green]All tools are installed.[/green]")
             else:
                 console.print(f"[yellow]Missing: {', '.join(missing)}[/yellow]")
+                packages = (
+                    system.TOOL_PACKAGES_WINDOWS if system.IS_WINDOWS
+                    else system.TOOL_PACKAGES
+                )
                 if _require_root():
                     for tool in missing:
-                        pkg = system.TOOL_PACKAGES[tool]
+                        pkg = packages.get(tool, tool)
+                        if pkg == system.WINDOWS_NOT_AVAILABLE:
+                            console.print(
+                                f"[dim]{tool} — not available on Windows (Linux only)[/dim]"
+                            )
+                            continue
                         if Confirm.ask(f"Install [bold]{pkg}[/bold]?", default=True):
                             ok, out = system.install_tool(pkg)
                             console.print(out[-500:] if len(out) > 500 else out)
@@ -228,8 +276,59 @@ def menu_system_setup() -> None:
 # Workflow: Network Discovery
 # ---------------------------------------------------------------------------
 
+def _windows_network_scan() -> None:
+    """Scan and display nearby Wi-Fi networks on Windows using netsh."""
+    console.print(
+        "[dim]Scanning for nearby Wi-Fi networks using Windows netsh...[/dim]\n"
+        "[dim](No monitor mode required — uses the Windows WLAN API.)[/dim]\n"
+    )
+    networks = system.scan_networks_windows()
+    if not networks:
+        console.print(
+            "[yellow]No networks found.[/yellow]\n"
+            "[dim]Make sure Wi-Fi is enabled and your adapter is connected.[/dim]"
+        )
+        _pause()
+        return
+
+    table = Table(
+        title="Discovered Wi-Fi Networks",
+        box=box.ROUNDED,
+        border_style="cyan",
+        header_style="bold cyan",
+        show_lines=True,
+    )
+    for col in ("SSID", "BSSID", "Signal", "Channel", "Authentication", "Cipher", "Radio"):
+        table.add_column(col, min_width=8)
+
+    for net in networks:
+        table.add_row(
+            net.get("SSID", ""),
+            net.get("BSSID", ""),
+            net.get("Signal", ""),
+            net.get("Channel", ""),
+            net.get("Auth", ""),
+            net.get("Cipher", ""),
+            net.get("Radio", ""),
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[dim]{len(networks)} network(s) found.[/dim]\n"
+        "[yellow]Note: Deep packet capture requires Linux tools "
+        "(airodump-ng). Use WSL or a Linux system for capture workflows.[/yellow]"
+    )
+    _pause()
+
+
 def menu_network_discovery() -> None:
     _clear()
+
+    if system.IS_WINDOWS:
+        _heading("Network Discovery")
+        _windows_network_scan()
+        return
+
     _heading("Network Discovery — airodump-ng")
 
     if not _require_root():
@@ -722,7 +821,12 @@ def menu_krack_test() -> None:
             return
 
         if choice == "1":
-            dest = Prompt.ask("Clone to directory", default="/opt/krackattacks-scripts")
+            default_dest = (
+                r"C:\Tools\krackattacks-scripts"
+                if system.IS_WINDOWS
+                else "/opt/krackattacks-scripts"
+            )
+            dest = Prompt.ask("Clone to directory", default=default_dest)
             console.print(f"[cyan]Cloning from GitHub to {dest}...[/cyan]")
             ok, out = krack.clone_repo(dest)
             console.print(out)
@@ -852,6 +956,21 @@ def menu_bettercap() -> None:
 def menu_wifite() -> None:
     _clear()
     _heading("Wifite2 — Automated Wi-Fi Auditing", "blue")
+
+    if system.IS_WINDOWS:
+        console.print(
+            Panel(
+                "[bold yellow]Wifite2 is not available on Windows.[/bold yellow]\n\n"
+                "Wifite2 requires Linux-specific tools (airmon-ng, airodump-ng) and "
+                "relies on monitor mode, which is not supported on Windows.\n\n"
+                "[dim]To use Wifite2, run WifiTool on Linux, or install "
+                "WSL (Windows Subsystem for Linux) and run it there.[/dim]",
+                border_style="yellow",
+                padding=(1, 2),
+            )
+        )
+        _pause()
+        return
 
     if not wifite.is_available():
         console.print("[red]✘ wifite / wifite2 not found.[/red]")
@@ -1061,10 +1180,16 @@ def run() -> None:
     render_banner(console)
 
     if not system.is_root():
-        console.print(
-            "[yellow]⚠ Not running as root.  Most capture operations require "
-            "root privileges (sudo).[/yellow]\n"
-        )
+        if system.IS_WINDOWS:
+            console.print(
+                "[yellow]⚠ Not running as Administrator.  Some operations require "
+                "administrator privileges (Run as administrator).[/yellow]\n"
+            )
+        else:
+            console.print(
+                "[yellow]⚠ Not running as root.  Most capture operations require "
+                "root privileges (sudo).[/yellow]\n"
+            )
 
     valid_choices = [item[0] for item in MENU_ITEMS]
 
