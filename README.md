@@ -12,6 +12,30 @@ than simulating them.
 
 ---
 
+## Quick Start — Windows (double-click setup)
+
+Two batch scripts are included so you can be up and running with a single
+double-click:
+
+| Script | Purpose |
+|---|---|
+| `setup.bat` | **Run once.** Installs Python (via winget if missing), installs `rich` and `scapy`, optionally installs aircrack-ng / hashcat / Git, and opens the Npcap download page. |
+| `WifiTool.bat` | **Run every time.** Launches WifiTool; automatically requests Administrator privileges. |
+
+### Steps
+
+1. **Download / clone** this repository to any folder on your PC.
+2. **Double-click `setup.bat`** — it will request Administrator access, then
+   walk you through each installation step.
+3. When prompted, download and install **Npcap** from
+   <https://npcap.com/#download> (check *"Support raw 802.11 traffic"*).
+4. **Double-click `WifiTool.bat`** to start the tool at any time.
+
+> **Note**: Both scripts self-elevate to Administrator automatically.  If UAC
+> prompts you, click *Yes*.
+
+---
+
 ## Features
 
 | Menu Option | What it does | Real tool(s) used |
@@ -58,6 +82,10 @@ than simulating them.
 ## Installation
 
 ### Windows 11
+
+> **Easiest way**: use the included `setup.bat` and `WifiTool.bat` scripts
+> described in the [Quick Start](#quick-start--windows-double-click-setup)
+> section above.  The manual steps below are for reference.
 
 #### 1. Install Python (if not already installed)
 
