@@ -459,23 +459,57 @@ def install_tool(package: str) -> Tuple[bool, str]:
         return False, str(exc)
 
 
-def run_command_live(cmd: List[str], timeout: Optional[int] = None) -> int:
+def get_hashcat_dir() -> Optional[str]:
+    """Return the directory that contains ``hashcat.exe`` / ``hashcat``, or ``None``.
+
+    On Windows, hashcat must be invoked with its own directory as the working
+    directory because it locates its kernel files relative to ``cwd``.  This
+    function returns the parent directory of the hashcat executable found on
+    PATH so callers can pass it as ``cwd`` to :func:`run_command_live` /
+    :func:`stream_command`.
+
+    On Linux/macOS hashcat can be called from any directory, so this returns
+    ``None`` on those platforms.
+    """
+    if not IS_WINDOWS:
+        return None
+    hashcat_path = shutil.which("hashcat")
+    if hashcat_path:
+        return str(Path(hashcat_path).parent)
+    return None
+
+
+def run_command_live(
+    cmd: List[str],
+    timeout: Optional[int] = None,
+    cwd: Optional[str] = None,
+) -> int:
     """Run *cmd* inheriting the current terminal (stdout/stderr pass-through).
 
     This is correct for ncurses-based tools like airodump-ng, bettercap, and
     wifite that manage their own screen output.  Returns the exit code.
+
+    *cwd* sets the working directory for the subprocess.  This is required
+    when running ``hashcat`` on Windows (use :func:`get_hashcat_dir`).
     """
-    return subprocess.call(cmd, timeout=timeout)
+    return subprocess.call(cmd, timeout=timeout, cwd=cwd)
 
 
-def stream_command(cmd: List[str]) -> Tuple[int, str]:
-    """Run *cmd*, capture all output, and return (returncode, combined_output)."""
+def stream_command(
+    cmd: List[str],
+    cwd: Optional[str] = None,
+) -> Tuple[int, str]:
+    """Run *cmd*, capture all output, and return (returncode, combined_output).
+
+    *cwd* sets the working directory for the subprocess.
+    """
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=600,
+            cwd=cwd,
         )
         return result.returncode, (result.stdout + result.stderr)
     except subprocess.TimeoutExpired as exc:
