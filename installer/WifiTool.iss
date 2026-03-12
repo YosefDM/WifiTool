@@ -33,7 +33,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 ; Output location (relative to the .iss file)
 OutputDir=Output
-OutputBaseFilename=WifiTool-Setup
+OutputBaseFilename=WifiTool-Setup-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
