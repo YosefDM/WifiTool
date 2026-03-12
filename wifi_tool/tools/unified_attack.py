@@ -51,20 +51,43 @@ _COMMON_WORDLISTS: List[str] = [
 ]
 
 
+def _search_wordlist(names: List[str]) -> Optional[str]:
+    """Search common locations for the first matching wordlist filename."""
+    import sys
+    for base in [Path(sys.executable).parent, Path(__file__).parent.parent.parent]:
+        for name in names:
+            candidate = base / "wordlists" / name
+            if candidate.exists():
+                return str(candidate)
+        # Also check bare repo root for convenience during development
+        for name in names:
+            candidate = base / name
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
 def find_default_wordlist() -> Optional[str]:
-    """Return first wordlist found in common locations, or None."""
+    """Return the WPA2-filtered wordlist (8-63 chars), or a generic fallback."""
     for path in _COMMON_WORDLISTS:
         if Path(path).exists():
             return path
-    here = Path(__file__).parent.parent.parent
-    for candidate in [
-        here / "wordlists" / "rockyou.txt",
-        here / "rockyou.txt",
-        here / "wordlist.txt",
-    ]:
-        if candidate.exists():
-            return str(candidate)
-    return None
+    return _search_wordlist([
+        "wifitool-wordlist-wpa2.txt",
+        "wifitool-wordlist-full.txt",
+        "rockyou.txt",
+        "wordlist.txt",
+    ])
+
+
+def find_full_wordlist() -> Optional[str]:
+    """Return the unfiltered wordlist (for WEP and other unconstrained protocols)."""
+    return _search_wordlist([
+        "wifitool-wordlist-full.txt",
+        "wifitool-wordlist-wpa2.txt",
+        "rockyou.txt",
+        "wordlist.txt",
+    ])
 
 
 class UnifiedAttacker:
@@ -286,6 +309,21 @@ class UnifiedAttacker:
             return key
 
         self._log("WEP crack failed -- not enough IVs or wrong key space", "warn")
+
+        # Dictionary fallback: try the full (unfiltered) wordlist against the capture.
+        # aircrack-ng -w wordlist also works on WEP .cap files.
+        wl = find_full_wordlist() or self.wordlist
+        if wl and not self._stop.is_set():
+            self._log(f"Trying dictionary attack on WEP capture: {Path(wl).name}", "info")
+            ok, _, key = aircrack.crack_wpa(
+                str(caps[-1]), wl,
+                bssid=self.target.bssid, ssid=self.target.ssid,
+            )
+            if key:
+                self._log(f"WEP dictionary crack succeeded -- key: {key}", "success")
+                return key
+            self._log("WEP dictionary attack exhausted wordlist", "warn")
+
         return None
 
     # ------------------------------------------------------------------

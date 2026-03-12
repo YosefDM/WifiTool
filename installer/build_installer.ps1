@@ -165,13 +165,85 @@ if (-not $SkipDownloads) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Verify required assets exist
+# 3. Download and filter wordlists (WPA2-compatible passwords, 8-63 chars)
+# ---------------------------------------------------------------------------
+if (-not $SkipDownloads) {
+    Write-Step "Downloading and filtering wordlists"
+    $WordlistDir  = Join-Path $AssetsDir "wordlists"
+    $WordlistFile = Join-Path $WordlistDir "wifitool-wordlist-wpa2.txt"
+
+    if ((Test-Path $WordlistFile) -and (Test-Path (Join-Path $WordlistDir "wifitool-wordlist-full.txt"))) {
+        Write-Info "Wordlist already built — skipping."
+    } else {
+        New-Item -ItemType Directory -Force -Path $WordlistDir | Out-Null
+
+        $PythonScript = @'
+import urllib.request, gzip, os, sys
+
+SOURCES = [
+    ("rockyou_2025_00", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_00.txt", False),
+    ("rockyou_2025_01", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_01.txt", False),
+    ("rockyou_2025_02", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_02.txt", False),
+    ("rockyou_2025_03", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_03.txt", False),
+    ("rockyou_2025_04", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_04.txt", False),
+    ("rockyou_2025_05", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_05.txt", False),
+    ("totse.info",      "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/totse.info.txt",       False),
+    ("openwall",        "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/openwall.net.gz",      True),
+]
+
+out_dir  = sys.argv[1]
+wpa2_file = os.path.join(out_dir, "wifitool-wordlist-wpa2.txt")
+full_file  = os.path.join(out_dir, "wifitool-wordlist-full.txt")
+
+wpa2_total = full_total = 0
+with open(wpa2_file, "w", encoding="utf-8", errors="ignore") as fwpa2, \
+     open(full_file,  "w", encoding="utf-8", errors="ignore") as ffull:
+    for label, url, is_gz in SOURCES:
+        print(f"  Downloading {label}...")
+        try:
+            with urllib.request.urlopen(url, timeout=120) as resp:
+                data = resp.read()
+            if is_gz:
+                data = gzip.decompress(data)
+            wpa2_count = full_count = 0
+            for line in data.decode("utf-8", errors="ignore").splitlines():
+                word = line.strip()
+                if not word:
+                    continue
+                ffull.write(word + "\n")
+                full_count += 1
+                if 8 <= len(word) <= 63:
+                    fwpa2.write(word + "\n")
+                    wpa2_count += 1
+            wpa2_total += wpa2_count
+            full_total  += full_count
+            print(f"    {full_count:,} total  |  {wpa2_count:,} WPA2-compatible")
+        except Exception as exc:
+            print(f"    WARNING: {exc}", file=sys.stderr)
+
+print(f"  WPA2 list: {wpa2_file} ({os.path.getsize(wpa2_file)/1024/1024:.1f} MB, {wpa2_total:,} passwords)")
+print(f"  Full list: {full_file}  ({os.path.getsize(full_file)/1024/1024:.1f} MB, {full_total:,} passwords)")
+'@
+        $TmpScript = [System.IO.Path]::GetTempFileName() + ".py"
+        Set-Content -Path $TmpScript -Value $PythonScript -Encoding UTF8
+        python $TmpScript $WordlistDir
+        Remove-Item $TmpScript
+        Write-OK "Wordlists ready in: $WordlistDir"
+    }
+} else {
+    Write-Info "Skipping wordlist download (-SkipDownloads)."
+}
+
+# ---------------------------------------------------------------------------
+# 4. Verify required assets exist
 # ---------------------------------------------------------------------------
 Write-Step "Verifying assets"
 $Required = @{
     "Npcap installer"    = Join-Path $AssetsDir "npcap-installer.exe"
     "aircrack-ng dir"    = Join-Path $AssetsDir "aircrack-ng"
     "hashcat dir"        = Join-Path $AssetsDir "hashcat"
+    "wordlist (wpa2)"    = Join-Path $AssetsDir "wordlists\wifitool-wordlist-wpa2.txt"
+    "wordlist (full)"    = Join-Path $AssetsDir "wordlists\wifitool-wordlist-full.txt"
 }
 foreach ($label in $Required.Keys) {
     $path = $Required[$label]
@@ -184,7 +256,7 @@ foreach ($label in $Required.Keys) {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Install Python build dependencies (PyInstaller + runtime deps)
+# 5. Install Python build dependencies (PyInstaller + runtime deps)
 # ---------------------------------------------------------------------------
 Write-Step "Installing Python build dependencies"
 Set-Location $RepoRoot
@@ -196,7 +268,7 @@ python -m pip install -r requirements.txt --quiet
 Write-OK "Python dependencies installed."
 
 # ---------------------------------------------------------------------------
-# 5. Build the WifiTool EXE with PyInstaller
+# 6. Build the WifiTool EXE with PyInstaller
 # ---------------------------------------------------------------------------
 if (-not $SkipPyInstaller) {
     Write-Step "Building WifiTool.exe with PyInstaller"
@@ -218,7 +290,7 @@ if (-not $SkipPyInstaller) {
 }
 
 # ---------------------------------------------------------------------------
-# 6. Compile the Inno Setup installer
+# 7. Compile the Inno Setup installer
 # ---------------------------------------------------------------------------
 Write-Step "Compiling Windows installer with Inno Setup 6"
 
@@ -246,7 +318,8 @@ if ($LASTEXITCODE -ne 0) {
 # ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
-$InstallerExe = Join-Path $OutputDir "WifiTool-Setup.exe"
+$InstallerExe = Get-ChildItem -Path $OutputDir -Filter "WifiTool-Setup-*.exe" |
+                Select-Object -First 1 -ExpandProperty FullName
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "  Build complete!" -ForegroundColor Green

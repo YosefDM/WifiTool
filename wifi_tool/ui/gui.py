@@ -50,6 +50,7 @@ class WifiToolApp(ctk.CTk):
 
         self._build_ui()
         self._refresh_interfaces()
+        self._auto_fill_wordlist()
         self._poll_queue()
 
     # ------------------------------------------------------------------
@@ -206,6 +207,13 @@ class WifiToolApp(ctk.CTk):
     # ------------------------------------------------------------------
     # Interface management
     # ------------------------------------------------------------------
+
+    def _auto_fill_wordlist(self) -> None:
+        """Pre-fill the wordlist field with the bundled or default wordlist."""
+        from ..tools.unified_attack import find_default_wordlist
+        default = find_default_wordlist()
+        if default:
+            self._wl_var.set(default)
 
     def _refresh_interfaces(self) -> None:
         ifaces = get_wireless_interfaces()

@@ -14,7 +14,7 @@
 ; ============================================================
 
 #define MyAppName      "WifiTool"
-#define MyAppVersion   "1.2.1"
+#define MyAppVersion   "1.3.0"
 #define MyAppPublisher "WifiTool Project"
 #define MyAppURL       "https://github.com/YosefDM/WifiTool"
 #define MyAppExeName   "WifiTool.exe"
@@ -63,6 +63,14 @@ Source: "assets\aircrack-ng\*"; \
 Source: "assets\hashcat\*"; \
   DestDir: "{app}\{#MyToolsSubdir}\hashcat"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
+
+; ---- Bundled wordlists (from common-password-list, filtered per protocol) ---
+; wpa2: 8-63 chars only (WPA2/WPA3 PSK requirement)
+; full: unfiltered (used for WEP and any protocol without length constraints)
+Source: "assets\wordlists\wifitool-wordlist-wpa2.txt"; \
+  DestDir: "{app}\wordlists"; Flags: ignoreversion
+Source: "assets\wordlists\wifitool-wordlist-full.txt"; \
+  DestDir: "{app}\wordlists"; Flags: ignoreversion
 
 ; ---- Npcap installer — runs interactively, deleted from {tmp} after install
 Source: "assets\npcap-installer.exe"; DestDir: "{tmp}"; \
