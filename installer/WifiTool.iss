@@ -14,7 +14,7 @@
 ; ============================================================
 
 #define MyAppName      "WifiTool"
-#define MyAppVersion   "1.0.0"
+#define MyAppVersion   "1.1.0"
 #define MyAppPublisher "WifiTool Project"
 #define MyAppURL       "https://github.com/YosefDM/WifiTool"
 #define MyAppExeName   "WifiTool.exe"
@@ -64,7 +64,7 @@ Source: "assets\hashcat\*"; \
   DestDir: "{app}\{#MyToolsSubdir}\hashcat"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
 
-; ---- Npcap installer — run silently, deleted from {tmp} after install ----
+; ---- Npcap installer — runs interactively, deleted from {tmp} after install
 Source: "assets\npcap-installer.exe"; DestDir: "{tmp}"; \
   Flags: deleteafterinstall
 
@@ -75,10 +75,12 @@ Name: "{commondesktop}\{#MyAppName}";     Filename: "{app}\{#MyAppExeName}"; \
   Tasks: desktopicon
 
 [Run]
-; Install Npcap silently with raw 802.11 / monitor-mode support enabled
+; Launch the Npcap interactive installer.  /dot11_support=yes pre-selects the
+; "Support raw 802.11 traffic (monitor mode)" checkbox — the user still clicks
+; through the wizard.  Silent install (/S) requires the paid Npcap OEM licence.
 Filename: "{tmp}\npcap-installer.exe"; \
-  Parameters: "/S /dot11_support=yes"; \
-  StatusMsg: "Installing Npcap packet-capture driver (monitor mode support)..."; \
+  Parameters: "/dot11_support=yes"; \
+  StatusMsg: "Please complete the Npcap setup wizard (monitor mode is pre-selected)..."; \
   Flags: waituntilterminated
 
 ; Offer to launch WifiTool after installation finishes
