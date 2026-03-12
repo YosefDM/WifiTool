@@ -61,7 +61,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "1.7"
-          $url = "https://github.com/aircrack-ng/aircrack-ng/releases/download/$version/aircrack-ng-$version-win.zip"
+          $url = "https://download.aircrack-ng.org/aircrack-ng-$version-win.zip"
           $zip  = "installer\assets\aircrack-ng.zip"
           $tmp  = "installer\assets\_aircrack_tmp"
           $dest = "installer\assets\aircrack-ng"
