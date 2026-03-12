@@ -53,7 +53,7 @@ $DistDir    = Join-Path $RepoRoot   "dist"
 # Tool download URLs (update version numbers here when new releases ship)
 # ---------------------------------------------------------------------------
 $AircrackVersion = "1.7"
-$AircrackUrl     = "https://github.com/aircrack-ng/aircrack-ng/releases/download/$AircrackVersion/aircrack-ng-$AircrackVersion-win.zip"
+$AircrackUrl     = "https://download.aircrack-ng.org/aircrack-ng-$AircrackVersion-win.zip"
 
 $HashcatVersion  = "6.2.6"
 $HashcatUrl      = "https://hashcat.net/files/hashcat-$HashcatVersion.7z"
