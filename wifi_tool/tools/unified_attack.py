@@ -41,17 +41,25 @@ _COMMON_WORDLISTS: List[str] = [
 
 def find_default_wordlist() -> Optional[str]:
     """Return first wordlist found in common locations, or None."""
+    import sys
+
     for path in _COMMON_WORDLISTS:
         if Path(path).exists():
             return path
-    here = Path(__file__).parent.parent.parent
-    for candidate in [
-        here / "wordlists" / "rockyou.txt",
-        here / "rockyou.txt",
-        here / "wordlist.txt",
-    ]:
-        if candidate.exists():
-            return str(candidate)
+
+    # Check relative to the running executable (PyInstaller bundle) and
+    # relative to this source file (dev / repo root).
+    for base in [Path(sys.executable).parent, Path(__file__).parent.parent.parent]:
+        for rel in [
+            Path("wordlists") / "wifitool-wordlist.txt",
+            Path("wordlists") / "rockyou.txt",
+            Path("rockyou.txt"),
+            Path("wordlist.txt"),
+        ]:
+            candidate = base / rel
+            if candidate.exists():
+                return str(candidate)
+
     return None
 
 

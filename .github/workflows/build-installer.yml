@@ -130,7 +130,54 @@ jobs:
           Write-Host "Npcap ready: $dest"
 
       # ----------------------------------------------------------------
-      # 9. Build WifiTool.exe with PyInstaller
+      # 9. Download and filter wordlists for WPA2 (8-63 chars)
+      # ----------------------------------------------------------------
+      - name: Download and filter wordlists
+        shell: python
+        run: |
+          import urllib.request, gzip, os, sys
+
+          SOURCES = [
+              # (label, url, is_gzip)
+              ("rockyou_2025_00", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_00.txt", False),
+              ("rockyou_2025_01", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_01.txt", False),
+              ("rockyou_2025_02", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_02.txt", False),
+              ("rockyou_2025_03", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_03.txt", False),
+              ("rockyou_2025_04", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_04.txt", False),
+              ("rockyou_2025_05", "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/rockyou_2025_05.txt", False),
+              ("totse.info",      "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/totse.info.txt",       False),
+              ("openwall",        "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/openwall.net.gz",      True),
+          ]
+
+          out_dir = os.path.join("installer", "assets", "wordlists")
+          os.makedirs(out_dir, exist_ok=True)
+          out_file = os.path.join(out_dir, "wifitool-wordlist.txt")
+
+          total = 0
+          with open(out_file, "w", encoding="utf-8", errors="ignore") as fout:
+              for label, url, is_gz in SOURCES:
+                  print(f"Downloading {label}...")
+                  try:
+                      with urllib.request.urlopen(url, timeout=120) as resp:
+                          data = resp.read()
+                      if is_gz:
+                          data = gzip.decompress(data)
+                      count = 0
+                      for line in data.decode("utf-8", errors="ignore").splitlines():
+                          word = line.strip()
+                          if 8 <= len(word) <= 63:
+                              fout.write(word + "\n")
+                              count += 1
+                      total += count
+                      print(f"  {count:,} WPA2-compatible passwords from {label}")
+                  except Exception as exc:
+                      print(f"  WARNING: failed to download {label}: {exc}", file=sys.stderr)
+
+          size_mb = os.path.getsize(out_file) / 1024 / 1024
+          print(f"\nWordlist ready: {out_file}  ({size_mb:.1f} MB, {total:,} passwords)")
+
+      # ----------------------------------------------------------------
+      # 10. Build WifiTool.exe with PyInstaller
       # ----------------------------------------------------------------
       - name: Build with PyInstaller
         run: pyinstaller WifiTool.spec --noconfirm
