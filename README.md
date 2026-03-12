@@ -12,10 +12,39 @@ than simulating them.
 
 ---
 
-## Quick Start — Windows (double-click setup)
+## Download the Windows Installer
 
-Two batch scripts are included so you can be up and running with a single
-double-click:
+The easiest way to get started on Windows is to download the pre-built
+installer from the [Releases page](https://github.com/YosefDM/WifiTool/releases).
+
+**WifiTool-Setup.exe** bundles everything you need:
+
+| Included component | Version | Purpose |
+|---|---|---|
+| WifiTool application | 1.0.0 | The tool itself (standalone EXE, no Python needed) |
+| aircrack-ng (Windows) | 1.7 | airodump-ng, aireplay-ng, aircrack-ng |
+| hashcat | 6.2.6 | GPU-accelerated WPA/WPA2 password cracking |
+| Npcap driver | 1.79 | Packet capture + monitor mode (installed silently) |
+
+### Installation steps
+
+1. Download **WifiTool-Setup.exe** from the Releases page.
+2. Run the installer — it will request Administrator access (required for
+   monitor mode and packet capture).
+3. The installer installs Npcap silently and adds aircrack-ng and hashcat to
+   your system PATH automatically.
+4. Launch **WifiTool** from the Start Menu or the Desktop shortcut.
+
+> **Note**: WifiTool always requires Administrator privileges when capturing
+> packets or toggling monitor mode.  Right-click → *Run as administrator* if
+> the shortcut doesn't request elevation automatically.
+
+---
+
+## Quick Start — Windows (double-click setup, no installer)
+
+If you prefer to run from source rather than using the installer, two batch
+scripts are included:
 
 | Script | Purpose |
 |---|---|
@@ -163,6 +192,32 @@ python main.py
 > **Note on Wifite2**: Wifite2 internally calls `airmon-ng` (a Linux bash
 > script) and cannot run natively on Windows.  WifiTool's individual workflow
 > menus replicate the same attack chains using Windows-native tools.
+
+---
+
+### Build the installer from source (Windows)
+
+> **Prerequisites**: Python 3.8+, [Inno Setup 6](https://jrsoftware.org/isinfo.php),
+> [7-Zip](https://www.7-zip.org), and an internet connection.
+
+```powershell
+# Clone the repo and run the build helper from an Administrator PowerShell:
+git clone https://github.com/YosefDM/WifiTool.git
+cd WifiTool
+powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1
+```
+
+The script:
+1. Downloads aircrack-ng, hashcat, and the Npcap driver installer into
+   `installer\assets\` (skipped automatically on subsequent runs).
+2. Runs **PyInstaller** (`WifiTool.spec`) to produce a self-contained EXE at
+   `dist\WifiTool\WifiTool.exe`.
+3. Runs **Inno Setup** (`installer\WifiTool.iss`) to compile the final
+   `installer\Output\WifiTool-Setup.exe`.
+
+The [GitHub Actions workflow](.github/workflows/build-installer.yml) runs the
+same steps automatically on every version tag push and attaches the installer
+to the GitHub Release.
 
 ---
 

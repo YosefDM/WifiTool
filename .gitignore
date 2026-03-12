@@ -27,3 +27,8 @@ env/
 # IDE
 .vscode/
 .idea/
+
+# Installer build artifacts
+# (downloaded binaries and compiled installer — not committed to the repo)
+installer/assets/
+installer/Output/

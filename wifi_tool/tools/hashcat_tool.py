@@ -6,7 +6,7 @@ GitHub: https://github.com/hashcat/hashcat
 import subprocess
 from typing import List, Optional, Tuple
 
-from .system import IS_WINDOWS, check_tool, run_command_live
+from .system import IS_WINDOWS, check_tool, get_hashcat_dir, run_command_live
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def crack_wpa2(hash_file: str, wordlist: str,
             cmd += ["-r", rule]
     if extra_args:
         cmd += extra_args
-    return run_command_live(cmd)
+    return run_command_live(cmd, cwd=get_hashcat_dir())
 
 
 def crack_pmkid(hash_file: str, wordlist: str,
@@ -84,7 +84,7 @@ def crack_pmkid(hash_file: str, wordlist: str,
             cmd += ["-r", rule]
     if extra_args:
         cmd += extra_args
-    return run_command_live(cmd)
+    return run_command_live(cmd, cwd=get_hashcat_dir())
 
 
 def crack_wpa_legacy(hash_file: str, wordlist: str,
@@ -95,7 +95,7 @@ def crack_wpa_legacy(hash_file: str, wordlist: str,
     cmd = ["hashcat", "-m", "2500", hash_file, wordlist]
     if extra_args:
         cmd += extra_args
-    return run_command_live(cmd)
+    return run_command_live(cmd, cwd=get_hashcat_dir())
 
 
 def show_cracked(hash_file: str, mode: int = 22000) -> Tuple[bool, str]:
@@ -112,6 +112,7 @@ def show_cracked(hash_file: str, mode: int = 22000) -> Tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=15,
+            cwd=get_hashcat_dir(),
         )
         return result.returncode == 0, (result.stdout + result.stderr).strip()
     except Exception as exc:
@@ -123,4 +124,4 @@ def launch_interactive(args: Optional[List[str]] = None) -> int:
     if not check_tool("hashcat"):
         raise RuntimeError("hashcat not found.")
     cmd = ["hashcat"] + (args or [])
-    return run_command_live(cmd)
+    return run_command_live(cmd, cwd=get_hashcat_dir())
