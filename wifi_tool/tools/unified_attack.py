@@ -17,8 +17,20 @@ from .system import (
     enable_monitor_mode,
     disable_monitor_mode,
     get_hashcat_dir,
+    kill_interfering_processes,
 )
 from . import aircrack, hashcat_tool, hcx, krack as krack_tool, wifite as wifite_tool
+
+# Hashcat mask attack patterns tried when no wordlist is set or wordlist is
+# exhausted.  Ordered by likelihood — short digit strings cover PINs, dates,
+# phone numbers and other common simple passwords.
+_MASK_ATTACKS: List[tuple] = [
+    # (label, mask)
+    ("6-digit number",   "?d?d?d?d?d?d"),
+    ("8-digit number",   "?d?d?d?d?d?d?d?d"),
+    ("10-digit number",  "?d?d?d?d?d?d?d?d?d?d"),
+    ("8-char lowercase", "?l?l?l?l?l?l?l?l"),
+]
 
 
 @dataclass
@@ -97,9 +109,21 @@ class UnifiedAttacker:
         password: Optional[str] = None
 
         try:
+            # Kill processes that hold the adapter before enabling monitor mode
+            self._log("Stopping interfering processes...", "info")
+            kill_output = kill_interfering_processes()
+            if kill_output:
+                self._log(kill_output, "output")
+
             # Enable monitor mode
             self._log("Enabling monitor mode...", "info")
             ok, result = enable_monitor_mode(self.interface)
+            if not ok:
+                # One retry — killing processes sometimes needs a moment
+                self._log(f"Monitor mode failed: {result}", "warn")
+                self._log("Retrying monitor mode...", "info")
+                time.sleep(2)
+                ok, result = enable_monitor_mode(self.interface)
             if ok:
                 self._monitor_iface = result
                 self._log(f"Monitor mode active: {result}", "success")
@@ -189,6 +213,36 @@ class UnifiedAttacker:
 
     def _prefix(self, name: str) -> str:
         return str(self.output_dir / name)
+
+    def _crack_with_masks(self, hash_file: str, mode: int) -> Optional[str]:
+        """Try hashcat mask (brute-force) attacks for common password patterns.
+
+        Used as a fallback when no wordlist is set or the wordlist is
+        exhausted.  Covers PINs, dates, phone numbers, and short alphabetic
+        passwords without requiring any external file.
+        """
+        if not check_tool("hashcat"):
+            return None
+        for label, mask in _MASK_ATTACKS:
+            if self._stop.is_set():
+                break
+            self._log(f"Mask attack: {label} ({mask})...", "info")
+            self._stream(
+                [
+                    "hashcat", "-a", "3", "-m", str(mode),
+                    hash_file, mask, "--force", "--quiet",
+                ],
+                timeout=self.CRACK_TIMEOUT,
+                cwd=get_hashcat_dir(),
+            )
+            if self._stop.is_set():
+                break
+            ok, out = hashcat_tool.show_cracked(hash_file, mode)
+            if ok and out.strip():
+                password = out.strip().split(":")[-1]
+                self._log(f"Mask attack cracked ({label}) -- password: {password}", "success")
+                return password
+        return None
 
     # ------------------------------------------------------------------
     # Phase: WEP
@@ -301,7 +355,8 @@ class UnifiedAttacker:
             return None
 
         if not self.wordlist:
-            return None
+            self._log("No wordlist -- running mask attacks on PMKID hashes...", "info")
+            return self._crack_with_masks(hash_file, 22801)
 
         self._log(f"hashcat -m 22801 | wordlist: {Path(self.wordlist).name}", "info")
         self._stream(
@@ -319,8 +374,8 @@ class UnifiedAttacker:
             self._log(f"PMKID cracked -- password: {password}", "success")
             return password
 
-        self._log("PMKID attack exhausted wordlist", "warn")
-        return None
+        self._log("PMKID wordlist exhausted -- trying mask attacks...", "warn")
+        return self._crack_with_masks(hash_file, 22801)
 
     # ------------------------------------------------------------------
     # Phase: WPA/WPA2 4-Way Handshake
@@ -439,8 +494,8 @@ class UnifiedAttacker:
                 )
                 return key
 
-        self._log("Handshake attack exhausted wordlist", "warn")
-        return None
+        self._log("Handshake wordlist exhausted -- trying mask attacks...", "warn")
+        return self._crack_with_masks(hash_file, 22000)
 
     # ------------------------------------------------------------------
     # Phase: Bettercap handshake capture
