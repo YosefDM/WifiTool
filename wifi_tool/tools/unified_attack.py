@@ -18,6 +18,7 @@ from .system import (
     disable_monitor_mode,
     get_hashcat_dir,
     kill_interfering_processes,
+    restart_wlansvc,
 )
 from . import aircrack, hashcat_tool, hcx, krack as krack_tool, wifite as wifite_tool
 
@@ -131,18 +132,14 @@ class UnifiedAttacker:
         enc = self.target.encryption.upper()
         password: Optional[str] = None
 
+        self._wlansvc_stopped = False
         try:
-            # Kill processes that hold the adapter before enabling monitor mode
-            self._log("Stopping interfering processes...", "info")
-            kill_output = kill_interfering_processes()
-            if kill_output:
-                self._log(kill_output, "output")
-
-            # Enable monitor mode
+            # Enable monitor mode FIRST — on Windows, WlanHelper needs the
+            # WLAN AutoConfig service (wlansvc) running to talk to the WLAN API.
+            # Stopping wlansvc before this call causes myGUIDFromString errors.
             self._log("Enabling monitor mode...", "info")
             ok, result = enable_monitor_mode(self.interface)
             if not ok:
-                # One retry — killing processes sometimes needs a moment
                 self._log(f"Monitor mode failed: {result}", "warn")
                 self._log("Retrying monitor mode...", "info")
                 time.sleep(2)
@@ -154,6 +151,16 @@ class UnifiedAttacker:
                 self._monitor_iface = self.interface
                 self._log(f"Monitor mode failed: {result}", "warn")
                 self._log("Continuing in managed mode (capture may fail)", "warn")
+
+            # NOW stop processes that compete for the adapter during capture.
+            # wlansvc holds the NIC in managed mode and interferes with raw
+            # 802.11 capture tools (airodump-ng, hcxdumptool).
+            self._log("Stopping interfering processes...", "info")
+            kill_output = kill_interfering_processes()
+            if kill_output:
+                self._log(kill_output, "output")
+            if IS_WINDOWS and kill_output and "stopped successfully" in kill_output.lower():
+                self._wlansvc_stopped = True
 
             if self._stop.is_set():
                 self._on_result(None)
@@ -183,6 +190,12 @@ class UnifiedAttacker:
                     self._phase_krack()
 
         finally:
+            # On Windows, restart wlansvc before calling WlanHelper to restore
+            # managed mode — WlanHelper requires the WLAN API (wlansvc) running.
+            if IS_WINDOWS and self._wlansvc_stopped:
+                svc_out = restart_wlansvc()
+                if svc_out:
+                    self._log(svc_out, "output")
             if self._monitor_iface and self._monitor_iface != self.interface:
                 disable_monitor_mode(self._monitor_iface)
                 self._log("Monitor mode disabled", "info")

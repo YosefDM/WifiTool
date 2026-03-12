@@ -359,6 +359,26 @@ def disable_monitor_mode(interface: str) -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def restart_wlansvc() -> str:
+    """Restart the WLAN AutoConfig service on Windows.
+
+    Call this after capture is complete so that WlanHelper can talk to the
+    WLAN API again (it requires wlansvc to be running).
+    """
+    if not IS_WINDOWS:
+        return ""
+    try:
+        result = subprocess.run(
+            ["net", "start", "wlansvc"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return (result.stdout + result.stderr).strip()
+    except Exception as exc:
+        return str(exc)
+
+
 def kill_interfering_processes() -> str:
     """Stop processes that interfere with monitor mode.
 
