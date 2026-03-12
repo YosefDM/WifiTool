@@ -14,7 +14,7 @@
 ; ============================================================
 
 #define MyAppName      "WifiTool"
-#define MyAppVersion   "1.2.0"
+#define MyAppVersion   "1.2.1"
 #define MyAppPublisher "WifiTool Project"
 #define MyAppURL       "https://github.com/YosefDM/WifiTool"
 #define MyAppExeName   "WifiTool.exe"
@@ -75,13 +75,15 @@ Name: "{commondesktop}\{#MyAppName}";     Filename: "{app}\{#MyAppExeName}"; \
   Tasks: desktopicon
 
 [Run]
-; Launch the Npcap interactive installer.  /dot11_support=yes pre-selects the
-; "Support raw 802.11 traffic (monitor mode)" checkbox — the user still clicks
-; through the wizard.  Silent install (/S) requires the paid Npcap OEM licence.
+; Launch the Npcap interactive installer only if Npcap is not already present.
+; Skipping on upgrades avoids the kernel-driver restart prompt.
+; /dot11_support=yes pre-selects "Support raw 802.11 traffic (monitor mode)".
+; Silent install (/S) requires the paid Npcap OEM licence — not used here.
 Filename: "{tmp}\npcap-installer.exe"; \
   Parameters: "/dot11_support=yes"; \
   StatusMsg: "Please complete the Npcap setup wizard (monitor mode is pre-selected)..."; \
-  Flags: waituntilterminated
+  Flags: waituntilterminated; \
+  Check: NpcapNotInstalled
 
 ; Offer to launch WifiTool after installation finishes
 Filename: "{app}\{#MyAppExeName}"; \
@@ -93,6 +95,14 @@ Filename: "{app}\{#MyAppExeName}"; \
 // PATH helpers — add/remove the bundled tool directories from the system
 // PATH environment variable so that WifiTool.exe can call the tools by name.
 // -------------------------------------------------------------------------
+
+function NpcapNotInstalled: Boolean;
+begin
+  // Npcap places wpcap.dll in the Npcap sub-directory of System32.
+  // If the file exists, Npcap is already installed — skip the installer
+  // to avoid a kernel-driver reload and the associated restart prompt.
+  Result := not FileExists(ExpandConstant('{sys}\Npcap\wpcap.dll'));
+end;
 
 function EnvAddPath(const NewDir: string): Boolean;
 var
