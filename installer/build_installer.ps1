@@ -170,9 +170,9 @@ if (-not $SkipDownloads) {
 if (-not $SkipDownloads) {
     Write-Step "Downloading and filtering wordlists"
     $WordlistDir  = Join-Path $AssetsDir "wordlists"
-    $WordlistFile = Join-Path $WordlistDir "wifitool-wordlist.txt"
+    $WordlistFile = Join-Path $WordlistDir "wifitool-wordlist-wpa2.txt"
 
-    if (Test-Path $WordlistFile) {
+    if ((Test-Path $WordlistFile) -and (Test-Path (Join-Path $WordlistDir "wifitool-wordlist-full.txt"))) {
         Write-Info "Wordlist already built — skipping."
     } else {
         New-Item -ItemType Directory -Force -Path $WordlistDir | Out-Null
@@ -191,9 +191,13 @@ SOURCES = [
     ("openwall",        "https://raw.githubusercontent.com/josuamarcelc/common-password-list/main/openwall.net.gz",      True),
 ]
 
-out_file = sys.argv[1]
-total = 0
-with open(out_file, "w", encoding="utf-8", errors="ignore") as fout:
+out_dir  = sys.argv[1]
+wpa2_file = os.path.join(out_dir, "wifitool-wordlist-wpa2.txt")
+full_file  = os.path.join(out_dir, "wifitool-wordlist-full.txt")
+
+wpa2_total = full_total = 0
+with open(wpa2_file, "w", encoding="utf-8", errors="ignore") as fwpa2, \
+     open(full_file,  "w", encoding="utf-8", errors="ignore") as ffull:
     for label, url, is_gz in SOURCES:
         print(f"  Downloading {label}...")
         try:
@@ -201,25 +205,30 @@ with open(out_file, "w", encoding="utf-8", errors="ignore") as fout:
                 data = resp.read()
             if is_gz:
                 data = gzip.decompress(data)
-            count = 0
+            wpa2_count = full_count = 0
             for line in data.decode("utf-8", errors="ignore").splitlines():
                 word = line.strip()
+                if not word:
+                    continue
+                ffull.write(word + "\n")
+                full_count += 1
                 if 8 <= len(word) <= 63:
-                    fout.write(word + "\n")
-                    count += 1
-            total += count
-            print(f"    {count:,} WPA2-compatible passwords")
+                    fwpa2.write(word + "\n")
+                    wpa2_count += 1
+            wpa2_total += wpa2_count
+            full_total  += full_count
+            print(f"    {full_count:,} total  |  {wpa2_count:,} WPA2-compatible")
         except Exception as exc:
             print(f"    WARNING: {exc}", file=sys.stderr)
 
-size_mb = os.path.getsize(out_file) / 1024 / 1024
-print(f"  Wordlist: {out_file} ({size_mb:.1f} MB, {total:,} passwords)")
+print(f"  WPA2 list: {wpa2_file} ({os.path.getsize(wpa2_file)/1024/1024:.1f} MB, {wpa2_total:,} passwords)")
+print(f"  Full list: {full_file}  ({os.path.getsize(full_file)/1024/1024:.1f} MB, {full_total:,} passwords)")
 '@
         $TmpScript = [System.IO.Path]::GetTempFileName() + ".py"
         Set-Content -Path $TmpScript -Value $PythonScript -Encoding UTF8
-        python $TmpScript $WordlistFile
+        python $TmpScript $WordlistDir
         Remove-Item $TmpScript
-        Write-OK "Wordlist ready: $WordlistFile"
+        Write-OK "Wordlists ready in: $WordlistDir"
     }
 } else {
     Write-Info "Skipping wordlist download (-SkipDownloads)."
@@ -233,7 +242,8 @@ $Required = @{
     "Npcap installer"    = Join-Path $AssetsDir "npcap-installer.exe"
     "aircrack-ng dir"    = Join-Path $AssetsDir "aircrack-ng"
     "hashcat dir"        = Join-Path $AssetsDir "hashcat"
-    "wordlist"           = Join-Path $AssetsDir "wordlists\wifitool-wordlist.txt"
+    "wordlist (wpa2)"    = Join-Path $AssetsDir "wordlists\wifitool-wordlist-wpa2.txt"
+    "wordlist (full)"    = Join-Path $AssetsDir "wordlists\wifitool-wordlist-full.txt"
 }
 foreach ($label in $Required.Keys) {
     $path = $Required[$label]

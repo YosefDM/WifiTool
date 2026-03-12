@@ -64,8 +64,12 @@ Source: "assets\hashcat\*"; \
   DestDir: "{app}\{#MyToolsSubdir}\hashcat"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
 
-; ---- Bundled wordlist (WPA2-filtered passwords from common-password-list) ---
-Source: "assets\wordlists\wifitool-wordlist.txt"; \
+; ---- Bundled wordlists (from common-password-list, filtered per protocol) ---
+; wpa2: 8-63 chars only (WPA2/WPA3 PSK requirement)
+; full: unfiltered (used for WEP and any protocol without length constraints)
+Source: "assets\wordlists\wifitool-wordlist-wpa2.txt"; \
+  DestDir: "{app}\wordlists"; Flags: ignoreversion
+Source: "assets\wordlists\wifitool-wordlist-full.txt"; \
   DestDir: "{app}\wordlists"; Flags: ignoreversion
 
 ; ---- Npcap installer — runs interactively, deleted from {tmp} after install
