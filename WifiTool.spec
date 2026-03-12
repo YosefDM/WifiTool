@@ -12,14 +12,25 @@ The resulting dist/WifiTool/ folder is bundled by the Inno Setup script
 (installer/WifiTool.iss) into the final WifiTool-Setup.exe installer.
 """
 
+import os
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
+
+# customtkinter ships JSON theme files and PNG assets it reads from disk at
+# runtime.  collect_data_files() locates the installed package directory and
+# returns (src, dest) pairs so PyInstaller copies them into the bundle.
+_ctk_datas = collect_data_files("customtkinter")
 
 a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=_ctk_datas,
     hiddenimports=[
+        # customtkinter detects the OS dark/light theme via darkdetect;
+        # PyInstaller does not auto-discover this dependency.
+        "darkdetect",
         # scapy sub-packages are not auto-discovered by PyInstaller
         "scapy.all",
         "scapy.layers.all",
@@ -51,7 +62,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,                   # Rich terminal UI — keep console window
+    console=False,                  # GUI app — suppress the console window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
