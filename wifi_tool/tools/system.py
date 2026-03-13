@@ -246,6 +246,38 @@ def get_all_interfaces() -> List[str]:
         return []
 
 
+def get_npcap_device_name(interface_name: str) -> Optional[str]:
+    """Return the Npcap device path (\\Device\\NPF_{GUID}) for a Wi-Fi interface.
+
+    airodump-ng and aireplay-ng on Windows require this Npcap path rather
+    than the friendly name (e.g. "Wi-Fi") that WlanHelper accepts.
+    Must be called while wlansvc is still running (before kill_interfering_processes).
+    """
+    if not IS_WINDOWS:
+        return None
+    try:
+        result = subprocess.run(
+            ["netsh", "wlan", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        current_name: Optional[str] = None
+        for line in result.stdout.splitlines():
+            s = line.strip()
+            low = s.lower()
+            # "Name : Wi-Fi" — avoid matching "Network Name (SSID)"
+            if low.startswith("name") and ":" in s and "ssid" not in low and "network" not in low:
+                current_name = s.split(":", 1)[1].strip()
+            elif low.startswith("guid") and ":" in s:
+                if current_name and current_name.lower() == interface_name.lower():
+                    guid = s.split(":", 1)[1].strip()
+                    return rf"\Device\NPF_{{{guid}}}"
+    except Exception:
+        pass
+    return None
+
+
 def _enable_monitor_mode_windows(interface: str) -> Tuple[bool, str]:
     """Enable monitor mode on Windows using Npcap's WlanHelper.exe."""
     helper = find_npcap_wlanhelper()
