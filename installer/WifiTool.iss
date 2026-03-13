@@ -14,7 +14,7 @@
 ; ============================================================
 
 #define MyAppName      "WifiTool"
-#define MyAppVersion   "1.3.10"
+#define MyAppVersion   "1.3.9"
 #define MyAppPublisher "WifiTool Project"
 #define MyAppURL       "https://github.com/YosefDM/WifiTool"
 #define MyAppExeName   "WifiTool.exe"
