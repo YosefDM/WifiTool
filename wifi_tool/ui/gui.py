@@ -181,12 +181,13 @@ class WifiToolApp(ctk.CTk):
         style.configure(
             "Wifi.Treeview",
             background="#2b2b2b", foreground="#e0e0e0",
-            rowheight=28, fieldbackground="#2b2b2b", borderwidth=0,
+            font=("Segoe UI", 12),
+            rowheight=32, fieldbackground="#2b2b2b", borderwidth=0,
         )
         style.configure(
             "Wifi.Treeview.Heading",
             background="#1a1a2e", foreground="#7eb0d4",
-            font=("Segoe UI", 10, "bold"), relief="flat",
+            font=("Segoe UI", 12, "bold"), relief="flat",
         )
         style.map(
             "Wifi.Treeview",
@@ -198,7 +199,7 @@ class WifiToolApp(ctk.CTk):
             parent, columns=cols, show="headings",
             style="Wifi.Treeview", selectmode="browse",
         )
-        widths = {"SSID": 190, "BSSID": 165, "Ch": 45, "Security": 105, "Signal": 80}
+        widths = {"SSID": 240, "BSSID": 170, "Ch": 50, "Security": 110, "Signal": 80}
         for col in cols:
             tree.heading(col, text=col)
             tree.column(col, width=widths[col], minwidth=40)
