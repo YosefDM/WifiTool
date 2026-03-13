@@ -353,13 +353,29 @@ def capture_pmkid_eapol(
         except Exception:
             pass
 
+    # On Windows, sc.sniff() requires a NetworkInterface object rather than
+    # a raw \Device\NPF_{GUID} string.  Resolve it from conf.ifaces; fall
+    # back to the original string if no match is found.
+    iface_obj = interface
+    try:
+        for _obj in sc.conf.ifaces.values():
+            _pcap = (
+                getattr(_obj, "pcap_name", "")
+                or getattr(_obj, "network_name", "")
+            )
+            if _pcap and _pcap.lower() == interface.lower():
+                iface_obj = _obj
+                break
+    except Exception:
+        pass
+
     print(
         f"[*] Sniffing on {interface!r} (Ctrl+C to stop)\n"
         "    Waiting for EAPOL handshakes and beacon frames…"
     )
     try:
         sc.sniff(
-            iface=interface,
+            iface=iface_obj,
             prn=_handler,
             store=False,
             timeout=timeout,
