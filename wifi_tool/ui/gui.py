@@ -8,16 +8,23 @@ Layout
   Bottom: Selected-network info | Attack / Stop buttons | Result label
 """
 
+import datetime
 import queue
 import subprocess
 import threading
+import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Dict, List, Optional
 
 import customtkinter as ctk
 
-from ..tools.system import IS_WINDOWS, get_wireless_interfaces, scan_networks_windows
+from ..tools.system import (
+    IS_WINDOWS,
+    get_wireless_interfaces,
+    restart_wlansvc,
+    scan_networks_windows,
+)
 from ..tools.unified_attack import AttackTarget, UnifiedAttacker
 
 
@@ -48,10 +55,18 @@ class WifiToolApp(ctk.CTk):
         self._log_queue: queue.Queue = queue.Queue()
         self._selected_net: Optional[Dict] = None
 
+        # Debug log — buffers every message with timestamps regardless of whether
+        # the debug window is open. Max 20 000 lines to avoid unbounded memory use.
+        self._debug_buffer: List[str] = []
+        self._debug_win: Optional[ctk.CTkToplevel] = None
+        self._debug_box: Optional[ctk.CTkTextbox] = None
+
         self._build_ui()
+        self._build_menubar()
         self._refresh_interfaces()
         self._auto_fill_wordlist()
         self._poll_queue()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -141,7 +156,7 @@ class WifiToolApp(ctk.CTk):
         # Bottom bar
         bottom = ctk.CTkFrame(self, height=88, corner_radius=0)
         bottom.grid(row=2, column=0, sticky="ew")
-        bottom.columnconfigure(3, weight=1)
+        bottom.columnconfigure(4, weight=1)
 
         self._target_label = ctk.CTkLabel(
             bottom, text="No network selected", font=ctk.CTkFont(size=12)
@@ -160,10 +175,17 @@ class WifiToolApp(ctk.CTk):
             fg_color="#7f0000", hover_color="#b71c1c",
             command=self._on_stop, state="disabled",
         )
-        self._stop_btn.grid(row=0, column=2, padx=(0, 12), pady=(8, 2))
+        self._stop_btn.grid(row=0, column=2, padx=(0, 6), pady=(8, 2))
+
+        self._fix_wlan_btn = ctk.CTkButton(
+            bottom, text="Fix WLAN", width=100,
+            fg_color="#4a3000", hover_color="#7a5000",
+            command=self._on_fix_wlan,
+        )
+        self._fix_wlan_btn.grid(row=0, column=3, padx=(0, 12), pady=(8, 2))
 
         self._progress = ctk.CTkProgressBar(bottom, mode="indeterminate", width=280)
-        self._progress.grid(row=0, column=3, padx=16, pady=(8, 2), sticky="e")
+        self._progress.grid(row=0, column=4, padx=16, pady=(8, 2), sticky="e")
         self._progress.set(0)
 
         self._result_label = ctk.CTkLabel(
@@ -172,7 +194,7 @@ class WifiToolApp(ctk.CTk):
             text_color="#4caf50",
         )
         self._result_label.grid(
-            row=1, column=0, columnspan=5, padx=12, pady=(0, 8), sticky="w"
+            row=1, column=0, columnspan=6, padx=12, pady=(0, 8), sticky="w"
         )
 
     def _build_treeview(self, parent: ctk.CTkFrame) -> ttk.Treeview:
@@ -181,12 +203,13 @@ class WifiToolApp(ctk.CTk):
         style.configure(
             "Wifi.Treeview",
             background="#2b2b2b", foreground="#e0e0e0",
-            rowheight=28, fieldbackground="#2b2b2b", borderwidth=0,
+            font=("Segoe UI", 12),
+            rowheight=32, fieldbackground="#2b2b2b", borderwidth=0,
         )
         style.configure(
             "Wifi.Treeview.Heading",
             background="#1a1a2e", foreground="#7eb0d4",
-            font=("Segoe UI", 10, "bold"), relief="flat",
+            font=("Segoe UI", 12, "bold"), relief="flat",
         )
         style.map(
             "Wifi.Treeview",
@@ -198,11 +221,110 @@ class WifiToolApp(ctk.CTk):
             parent, columns=cols, show="headings",
             style="Wifi.Treeview", selectmode="browse",
         )
-        widths = {"SSID": 190, "BSSID": 165, "Ch": 45, "Security": 105, "Signal": 80}
+        widths = {"SSID": 240, "BSSID": 170, "Ch": 50, "Security": 110, "Signal": 80}
         for col in cols:
             tree.heading(col, text=col)
             tree.column(col, width=widths[col], minwidth=40)
         return tree
+
+    # ------------------------------------------------------------------
+    # Menu bar
+    # ------------------------------------------------------------------
+
+    def _build_menubar(self) -> None:
+        menubar = tk.Menu(self)
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(
+            label="Debug Log\tCtrl+D", command=self._show_debug_window
+        )
+        menubar.add_cascade(label="View", menu=view_menu)
+        self.configure(menu=menubar)
+        self.bind("<Control-d>", lambda _: self._show_debug_window())
+
+    # ------------------------------------------------------------------
+    # Debug log window
+    # ------------------------------------------------------------------
+
+    def _show_debug_window(self) -> None:
+        """Open (or focus) the floating debug log window."""
+        if self._debug_win is not None and self._debug_win.winfo_exists():
+            self._debug_win.focus()
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title("WifiTool — Debug Log")
+        win.geometry("1000x640")
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(0, weight=1)
+
+        box = ctk.CTkTextbox(
+            win,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#0a0a0a",
+            state="disabled",
+            wrap="none",
+        )
+        box.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 0))
+
+        btn_bar = ctk.CTkFrame(win, height=40, fg_color="transparent")
+        btn_bar.grid(row=1, column=0, sticky="ew", padx=8, pady=6)
+        ctk.CTkButton(
+            btn_bar, text="Clear", width=80,
+            command=lambda: (
+                box.configure(state="normal"),
+                box.delete("1.0", "end"),
+                box.configure(state="disabled"),
+            ),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            btn_bar, text="Save…", width=80,
+            command=lambda: self._debug_save(box),
+        ).pack(side="left")
+
+        # Populate from buffer so history is visible even after the fact
+        box.configure(state="normal")
+        for line in self._debug_buffer:
+            box.insert("end", line + "\n")
+        box.configure(state="disabled")
+        box.see("end")
+
+        self._debug_win = win
+        self._debug_box = box
+
+    def _debug_append(self, message: str, level: str) -> None:
+        """Add a timestamped entry to the debug buffer (and window if open)."""
+        ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        line = f"[{ts}] {level.upper():<7}  {message}"
+
+        self._debug_buffer.append(line)
+        if len(self._debug_buffer) > 20_000:
+            self._debug_buffer = self._debug_buffer[-20_000:]
+
+        if (
+            self._debug_box is not None
+            and self._debug_win is not None
+            and self._debug_win.winfo_exists()
+        ):
+            self._debug_box.configure(state="normal")
+            self._debug_box.insert("end", line + "\n")
+            self._debug_box.configure(state="disabled")
+            self._debug_box.see("end")
+
+    def _debug_save(self, box: ctk.CTkTextbox) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save Debug Log",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialfile="wifitool-debug.txt",
+        )
+        if path:
+            try:
+                box.configure(state="normal")
+                content = box.get("1.0", "end")
+                box.configure(state="disabled")
+                Path(path).write_text(content, encoding="utf-8")
+            except Exception as exc:
+                self._append_log(f"Failed to save debug log: {exc}", "error")
 
     # ------------------------------------------------------------------
     # Interface management
@@ -373,6 +495,30 @@ class WifiToolApp(ctk.CTk):
         self._append_log("Attack stopped by user", "warn")
         self._attack_ended()
 
+    def _on_fix_wlan(self) -> None:
+        """Manually restart wlansvc and restore the adapter to managed mode."""
+        def _fix() -> None:
+            self._queue_log("Restarting WLAN AutoConfig service...", "info")
+            out = restart_wlansvc()
+            if out:
+                self._queue_log(out, "output")
+            self._queue_log("WLAN service restarted — adapter returned to managed mode.", "success")
+        threading.Thread(target=_fix, daemon=True).start()
+
+    def _on_close(self) -> None:
+        """Handle window close — stop any running attack and restore WLAN state."""
+        # Signal the attack to stop and give it a moment to run its finally block
+        # (which calls restart_wlansvc + disable_monitor_mode).
+        if self._attacker:
+            self._attacker.stop()
+        if self._attack_thread and self._attack_thread.is_alive():
+            self._attack_thread.join(timeout=5)
+        # Safety net: if the thread didn't finish in time or was never started,
+        # restart wlansvc directly so the adapter is not left without WLAN management.
+        if IS_WINDOWS:
+            restart_wlansvc()
+        self.destroy()
+
     def _attack_ended(self) -> None:
         self._progress.stop()
         self._progress.set(0)
@@ -423,6 +569,7 @@ class WifiToolApp(ctk.CTk):
         self._log_box.insert("end", prefix + message + "\n")
         self._log_box.configure(state="disabled")
         self._log_box.see("end")
+        self._debug_append(message, level)
 
     def _clear_log(self) -> None:
         self._log_box.configure(state="normal")
