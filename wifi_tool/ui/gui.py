@@ -13,6 +13,7 @@ import queue
 import subprocess
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Dict, List, Optional
@@ -200,16 +201,18 @@ class WifiToolApp(ctk.CTk):
     def _build_treeview(self, parent: ctk.CTkFrame) -> ttk.Treeview:
         style = ttk.Style()
         style.theme_use("default")
+        _tree_font = tkfont.Font(family="Segoe UI", size=12)
+        _heading_font = tkfont.Font(family="Segoe UI", size=12, weight="bold")
         style.configure(
             "Wifi.Treeview",
             background="#2b2b2b", foreground="#e0e0e0",
-            font=("Segoe UI", 12),
+            font=_tree_font,
             rowheight=32, fieldbackground="#2b2b2b", borderwidth=0,
         )
         style.configure(
             "Wifi.Treeview.Heading",
             background="#1a1a2e", foreground="#7eb0d4",
-            font=("Segoe UI", 12, "bold"), relief="flat",
+            font=_heading_font, relief="flat",
         )
         style.map(
             "Wifi.Treeview",

