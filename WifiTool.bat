@@ -15,13 +15,15 @@ if %errorLevel% neq 0 (
 :: ---- Move to the folder that contains this script ----------
 cd /d "%~dp0"
 
-:: ---- Pull latest changes from GitHub ----------------------
-echo Checking for updates...
-git pull
-if %errorLevel% neq 0 (
-    echo.
-    echo   WARNING: git pull failed. Running with current local code.
-    echo.
+:: ---- Pull latest changes from GitHub (dev repo only) ------
+if exist ".git" (
+    echo Checking for updates...
+    git pull
+    if %errorLevel% neq 0 (
+        echo.
+        echo   WARNING: git pull failed. Running with current local code.
+        echo.
+    )
 )
 
 :: ---- Install any new dependencies --------------------------
