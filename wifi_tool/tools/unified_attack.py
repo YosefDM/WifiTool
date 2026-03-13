@@ -116,9 +116,13 @@ class UnifiedAttacker:
         self._stop = threading.Event()
         self._current_proc: Optional[subprocess.Popen] = None
         self._monitor_iface: Optional[str] = None
-        # Npcap device path for airodump-ng/aireplay-ng on Windows
-        # (e.g. \Device\NPF_{GUID}). Resolved before wlansvc is stopped.
+        # Interface name for external capture tools (airodump-ng, aireplay-ng,
+        # bettercap, wifite).  On Windows this is the friendly name returned by
+        # WlanHelper ("Wi-Fi 2") — NOT the Npcap device path.
         self._cap_iface: Optional[str] = None
+        # Npcap device path (\Device\NPF_{GUID}) for Python/Scapy capture.
+        # Resolved before wlansvc is stopped (netsh needs wlansvc running).
+        self._scapy_iface: Optional[str] = None
 
     def stop(self) -> None:
         """Signal the attacker to stop and kill any running subprocess."""
@@ -138,14 +142,16 @@ class UnifiedAttacker:
 
         self._wlansvc_stopped = False
         try:
-            # Resolve the Npcap capture device path BEFORE stopping wlansvc,
-            # because netsh wlan show interfaces needs wlansvc to be running.
-            # airodump-ng / aireplay-ng on Windows require \Device\NPF_{GUID}
-            # — the friendly name ("Wi-Fi") is not accepted by those tools.
+            # Resolve the Npcap device path BEFORE stopping wlansvc because
+            # netsh wlan show interfaces requires wlansvc to be running.
+            # This path is used by Python/Scapy capture (pcap_utils).
             npcap_dev = get_npcap_device_name(self.interface) if IS_WINDOWS else None
             if npcap_dev:
-                self._log(f"Npcap capture device: {npcap_dev}", "info")
-            self._cap_iface = npcap_dev or self.interface
+                self._log(f"Npcap device: {npcap_dev}", "info")
+            self._scapy_iface = npcap_dev or self.interface
+            # Default cap_iface to original interface name; overridden below
+            # once monitor mode resolves the actual capture interface name.
+            self._cap_iface = self.interface
 
             # Enable monitor mode FIRST — on Windows, WlanHelper needs the
             # WLAN AutoConfig service (wlansvc) running to talk to the WLAN API.
@@ -170,10 +176,11 @@ class UnifiedAttacker:
                     ok, result = enable_monitor_mode(self.interface)
             if ok:
                 self._monitor_iface = result
-                # On Linux the monitor interface (wlan0mon) is the capture iface;
-                # on Windows _cap_iface keeps the Npcap device path.
-                if not IS_WINDOWS:
-                    self._cap_iface = result
+                # Use the exact interface name that WlanHelper/airmon-ng returned
+                # for ALL external capture tools on every platform.
+                # On Windows this is the friendly name ("Wi-Fi 2") that
+                # airodump-ng and aireplay-ng accept — NOT the Npcap device path.
+                self._cap_iface = result
                 self._log(f"Monitor mode active: {result}", "success")
             else:
                 self._monitor_iface = self.interface
@@ -390,7 +397,7 @@ class UnifiedAttacker:
                 from .pcap_utils import capture_pmkid_eapol
                 try:
                     capture_pmkid_eapol(
-                        self._cap_iface, cap_file,
+                        self._scapy_iface, cap_file,
                         bssid_filter=self.target.bssid,
                     )
                 finally:
