@@ -8,9 +8,11 @@ Layout
   Bottom: Selected-network info | Attack / Stop buttons | Result label
 """
 
+import datetime
 import queue
 import subprocess
 import threading
+import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Dict, List, Optional
@@ -53,7 +55,14 @@ class WifiToolApp(ctk.CTk):
         self._log_queue: queue.Queue = queue.Queue()
         self._selected_net: Optional[Dict] = None
 
+        # Debug log — buffers every message with timestamps regardless of whether
+        # the debug window is open. Max 20 000 lines to avoid unbounded memory use.
+        self._debug_buffer: List[str] = []
+        self._debug_win: Optional[ctk.CTkToplevel] = None
+        self._debug_box: Optional[ctk.CTkTextbox] = None
+
         self._build_ui()
+        self._build_menubar()
         self._refresh_interfaces()
         self._auto_fill_wordlist()
         self._poll_queue()
@@ -217,6 +226,105 @@ class WifiToolApp(ctk.CTk):
             tree.heading(col, text=col)
             tree.column(col, width=widths[col], minwidth=40)
         return tree
+
+    # ------------------------------------------------------------------
+    # Menu bar
+    # ------------------------------------------------------------------
+
+    def _build_menubar(self) -> None:
+        menubar = tk.Menu(self)
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(
+            label="Debug Log\tCtrl+D", command=self._show_debug_window
+        )
+        menubar.add_cascade(label="View", menu=view_menu)
+        self.configure(menu=menubar)
+        self.bind("<Control-d>", lambda _: self._show_debug_window())
+
+    # ------------------------------------------------------------------
+    # Debug log window
+    # ------------------------------------------------------------------
+
+    def _show_debug_window(self) -> None:
+        """Open (or focus) the floating debug log window."""
+        if self._debug_win is not None and self._debug_win.winfo_exists():
+            self._debug_win.focus()
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title("WifiTool — Debug Log")
+        win.geometry("1000x640")
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(0, weight=1)
+
+        box = ctk.CTkTextbox(
+            win,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#0a0a0a",
+            state="disabled",
+            wrap="none",
+        )
+        box.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 0))
+
+        btn_bar = ctk.CTkFrame(win, height=40, fg_color="transparent")
+        btn_bar.grid(row=1, column=0, sticky="ew", padx=8, pady=6)
+        ctk.CTkButton(
+            btn_bar, text="Clear", width=80,
+            command=lambda: (
+                box.configure(state="normal"),
+                box.delete("1.0", "end"),
+                box.configure(state="disabled"),
+            ),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            btn_bar, text="Save…", width=80,
+            command=lambda: self._debug_save(box),
+        ).pack(side="left")
+
+        # Populate from buffer so history is visible even after the fact
+        box.configure(state="normal")
+        for line in self._debug_buffer:
+            box.insert("end", line + "\n")
+        box.configure(state="disabled")
+        box.see("end")
+
+        self._debug_win = win
+        self._debug_box = box
+
+    def _debug_append(self, message: str, level: str) -> None:
+        """Add a timestamped entry to the debug buffer (and window if open)."""
+        ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        line = f"[{ts}] {level.upper():<7}  {message}"
+
+        self._debug_buffer.append(line)
+        if len(self._debug_buffer) > 20_000:
+            self._debug_buffer = self._debug_buffer[-20_000:]
+
+        if (
+            self._debug_box is not None
+            and self._debug_win is not None
+            and self._debug_win.winfo_exists()
+        ):
+            self._debug_box.configure(state="normal")
+            self._debug_box.insert("end", line + "\n")
+            self._debug_box.configure(state="disabled")
+            self._debug_box.see("end")
+
+    def _debug_save(self, box: ctk.CTkTextbox) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save Debug Log",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialfile="wifitool-debug.txt",
+        )
+        if path:
+            try:
+                box.configure(state="normal")
+                content = box.get("1.0", "end")
+                box.configure(state="disabled")
+                Path(path).write_text(content, encoding="utf-8")
+            except Exception as exc:
+                self._append_log(f"Failed to save debug log: {exc}", "error")
 
     # ------------------------------------------------------------------
     # Interface management
@@ -461,6 +569,7 @@ class WifiToolApp(ctk.CTk):
         self._log_box.insert("end", prefix + message + "\n")
         self._log_box.configure(state="disabled")
         self._log_box.see("end")
+        self._debug_append(message, level)
 
     def _clear_log(self) -> None:
         self._log_box.configure(state="normal")
