@@ -1,8 +1,7 @@
 @echo off
 :: ============================================================
 :: WifiTool Launcher
-:: Double-click this file to start WifiTool.
-:: It will request Administrator privileges automatically.
+:: Double-click to pull latest changes and start WifiTool.
 :: ============================================================
 
 :: ---- Self-elevate to Administrator -------------------------
@@ -16,16 +15,17 @@ if %errorLevel% neq 0 (
 :: ---- Move to the folder that contains this script ----------
 cd /d "%~dp0"
 
-:: ---- Sanity-check: Python installed? -----------------------
-python --version >nul 2>&1
+:: ---- Pull latest changes from GitHub ----------------------
+echo Checking for updates...
+git pull
 if %errorLevel% neq 0 (
     echo.
-    echo   ERROR: Python is not installed or not on PATH.
-    echo   Please run setup.bat first to install all dependencies.
+    echo   WARNING: git pull failed. Running with current local code.
     echo.
-    pause
-    exit /b 1
 )
+
+:: ---- Install any new dependencies --------------------------
+python -m pip install -r requirements.txt --quiet
 
 :: ---- Launch WifiTool ---------------------------------------
 python main.py

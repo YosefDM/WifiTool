@@ -32,3 +32,4 @@ env/
 # (downloaded binaries and compiled installer — not committed to the repo)
 installer/assets/
 installer/Output/
+wordlists/
