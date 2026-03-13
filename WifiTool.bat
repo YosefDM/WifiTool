@@ -18,12 +18,12 @@ cd /d "%~dp0"
 :: ---- Pull latest changes from GitHub (dev repo only) ------
 if exist ".git" (
     echo Checking for updates...
-    git pull
-    if %errorLevel% neq 0 (
-        echo.
-        echo   WARNING: git pull failed. Running with current local code.
-        echo.
-    )
+    echo.
+    git pull 2>&1
+    echo.
+    echo   Local version:
+    git log --oneline -1
+    echo.
 )
 
 :: ---- Install any new dependencies --------------------------
