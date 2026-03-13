@@ -14,7 +14,7 @@
 ; ============================================================
 
 #define MyAppName      "WifiTool"
-#define MyAppVersion   "1.3.4"
+#define MyAppVersion   "1.3.5"
 #define MyAppPublisher "WifiTool Project"
 #define MyAppURL       "https://github.com/YosefDM/WifiTool"
 #define MyAppExeName   "WifiTool.exe"
@@ -93,10 +93,13 @@ Filename: "{tmp}\npcap-installer.exe"; \
   Flags: waituntilterminated; \
   Check: NpcapNotInstalled
 
-; Offer to launch WifiTool after installation finishes
+; Offer to launch WifiTool after installation finishes.
+; shellexec causes Inno Setup to use ShellExecute instead of CreateProcess,
+; which honours the UAC manifest embedded in WifiTool.exe (uac_admin=True)
+; and triggers the elevation prompt instead of launching without admin rights.
 Filename: "{app}\{#MyAppExeName}"; \
   Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; \
-  Flags: nowait postinstall skipifsilent
+  Flags: nowait postinstall skipifsilent shellexec
 
 [Code]
 // -------------------------------------------------------------------------
