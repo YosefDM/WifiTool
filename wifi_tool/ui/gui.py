@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 import customtkinter as ctk
 
+from ..version import __version__
 from ..tools.system import (
     IS_WINDOWS,
     get_wireless_interfaces,
@@ -46,7 +47,7 @@ _LEVEL_PREFIX: Dict[str, str] = {
 class WifiToolApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("WiFi Tool")
+        self.title(f"WifiTool v{__version__}")
         self.geometry("1200x720")
         self.minsize(900, 580)
 
