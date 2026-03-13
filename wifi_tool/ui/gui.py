@@ -17,7 +17,12 @@ from typing import Dict, List, Optional
 
 import customtkinter as ctk
 
-from ..tools.system import IS_WINDOWS, get_wireless_interfaces, scan_networks_windows
+from ..tools.system import (
+    IS_WINDOWS,
+    get_wireless_interfaces,
+    restart_wlansvc,
+    scan_networks_windows,
+)
 from ..tools.unified_attack import AttackTarget, UnifiedAttacker
 
 
@@ -52,6 +57,7 @@ class WifiToolApp(ctk.CTk):
         self._refresh_interfaces()
         self._auto_fill_wordlist()
         self._poll_queue()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -141,7 +147,7 @@ class WifiToolApp(ctk.CTk):
         # Bottom bar
         bottom = ctk.CTkFrame(self, height=88, corner_radius=0)
         bottom.grid(row=2, column=0, sticky="ew")
-        bottom.columnconfigure(3, weight=1)
+        bottom.columnconfigure(4, weight=1)
 
         self._target_label = ctk.CTkLabel(
             bottom, text="No network selected", font=ctk.CTkFont(size=12)
@@ -160,10 +166,17 @@ class WifiToolApp(ctk.CTk):
             fg_color="#7f0000", hover_color="#b71c1c",
             command=self._on_stop, state="disabled",
         )
-        self._stop_btn.grid(row=0, column=2, padx=(0, 12), pady=(8, 2))
+        self._stop_btn.grid(row=0, column=2, padx=(0, 6), pady=(8, 2))
+
+        self._fix_wlan_btn = ctk.CTkButton(
+            bottom, text="Fix WLAN", width=100,
+            fg_color="#4a3000", hover_color="#7a5000",
+            command=self._on_fix_wlan,
+        )
+        self._fix_wlan_btn.grid(row=0, column=3, padx=(0, 12), pady=(8, 2))
 
         self._progress = ctk.CTkProgressBar(bottom, mode="indeterminate", width=280)
-        self._progress.grid(row=0, column=3, padx=16, pady=(8, 2), sticky="e")
+        self._progress.grid(row=0, column=4, padx=16, pady=(8, 2), sticky="e")
         self._progress.set(0)
 
         self._result_label = ctk.CTkLabel(
@@ -172,7 +185,7 @@ class WifiToolApp(ctk.CTk):
             text_color="#4caf50",
         )
         self._result_label.grid(
-            row=1, column=0, columnspan=5, padx=12, pady=(0, 8), sticky="w"
+            row=1, column=0, columnspan=6, padx=12, pady=(0, 8), sticky="w"
         )
 
     def _build_treeview(self, parent: ctk.CTkFrame) -> ttk.Treeview:
@@ -373,6 +386,30 @@ class WifiToolApp(ctk.CTk):
             self._attacker.stop()
         self._append_log("Attack stopped by user", "warn")
         self._attack_ended()
+
+    def _on_fix_wlan(self) -> None:
+        """Manually restart wlansvc and restore the adapter to managed mode."""
+        def _fix() -> None:
+            self._queue_log("Restarting WLAN AutoConfig service...", "info")
+            out = restart_wlansvc()
+            if out:
+                self._queue_log(out, "output")
+            self._queue_log("WLAN service restarted — adapter returned to managed mode.", "success")
+        threading.Thread(target=_fix, daemon=True).start()
+
+    def _on_close(self) -> None:
+        """Handle window close — stop any running attack and restore WLAN state."""
+        # Signal the attack to stop and give it a moment to run its finally block
+        # (which calls restart_wlansvc + disable_monitor_mode).
+        if self._attacker:
+            self._attacker.stop()
+        if self._attack_thread and self._attack_thread.is_alive():
+            self._attack_thread.join(timeout=5)
+        # Safety net: if the thread didn't finish in time or was never started,
+        # restart wlansvc directly so the adapter is not left without WLAN management.
+        if IS_WINDOWS:
+            restart_wlansvc()
+        self.destroy()
 
     def _attack_ended(self) -> None:
         self._progress.stop()
