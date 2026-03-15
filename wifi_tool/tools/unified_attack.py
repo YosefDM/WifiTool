@@ -123,6 +123,7 @@ class UnifiedAttacker:
         log_cb: LogCallback,
         result_cb: ResultCallback,
         unicast_deauth: bool = True,
+        client_count_cb: Optional[Callable[[int], None]] = None,
     ) -> None:
         self.target = target
         self.interface = interface
@@ -131,6 +132,7 @@ class UnifiedAttacker:
         self._log = log_cb
         self._on_result = result_cb
         self.unicast_deauth = unicast_deauth
+        self._client_count_cb = client_count_cb
         self._stop = threading.Event()
         self._current_proc: Optional[subprocess.Popen] = None
         self._monitor_iface: Optional[str] = None
@@ -797,10 +799,16 @@ class UnifiedAttacker:
         # Send deauth at 5 s, 20 s, 35 s, 50 s into the 60 s capture window.
         _deauth_delays = [5, 15, 15, 15]   # seconds between rounds (total ≤ 50s)
         first_burst = True
+        _last_reported_count = -1
         for delay in _deauth_delays:
             time.sleep(delay)
             if self._stop.is_set() or not cap_thread.is_alive():
                 break
+            count = len(discovered_clients)
+            if count != _last_reported_count:
+                if self._client_count_cb:
+                    self._client_count_cb(count)
+                _last_reported_count = count
             if first_burst and discovered_clients:
                 self._log(
                     f"Clients seen: {', '.join(sorted(discovered_clients))} "

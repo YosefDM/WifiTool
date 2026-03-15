@@ -204,7 +204,16 @@ class WifiToolApp(ctk.CTk):
             text_color="#4caf50",
         )
         self._result_label.grid(
-            row=1, column=0, columnspan=7, padx=12, pady=(0, 8), sticky="w"
+            row=1, column=0, columnspan=6, padx=12, pady=(0, 8), sticky="w"
+        )
+
+        self._client_count_label = ctk.CTkLabel(
+            bottom, text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#90caf9",
+        )
+        self._client_count_label.grid(
+            row=1, column=6, padx=(0, 12), pady=(0, 8), sticky="e"
         )
 
     def _build_treeview(self, parent: ctk.CTkFrame) -> ttk.Treeview:
@@ -496,6 +505,7 @@ class WifiToolApp(ctk.CTk):
             log_cb=self._queue_log,
             result_cb=self._on_result,
             unicast_deauth=self._unicast_deauth_var.get(),
+            client_count_cb=self._on_client_count,
         )
         self._attack_thread = threading.Thread(
             target=self._attacker.run, daemon=True
@@ -532,6 +542,11 @@ class WifiToolApp(ctk.CTk):
             restart_wlansvc()
         self.destroy()
 
+    def _on_client_count(self, count: int) -> None:
+        """Called from the attack thread when the discovered client count changes."""
+        self.after(0, self._client_count_label.configure,
+                   {"text": f"Clients detected: {count}"})
+
     def _attack_ended(self) -> None:
         self._progress.stop()
         self._progress.set(0)
@@ -539,6 +554,7 @@ class WifiToolApp(ctk.CTk):
         self._attack_btn.configure(
             state="normal" if self._selected_net else "disabled"
         )
+        self._client_count_label.configure(text="")
 
     def _on_result(self, password: Optional[str]) -> None:
         self.after(0, self._show_result, password)
