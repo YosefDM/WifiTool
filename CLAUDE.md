@@ -13,21 +13,28 @@ GitHub: https://github.com/YosefDM/WifiTool
 
 ## Rules Claude must always follow
 
-- **Always bump `MyAppVersion` in `installer/WifiTool.iss`** when making any
-  change that will produce a new installer build. This was forgotten once (v1.3.3)
-  and is a hard rule now.
 - **Never skip `--no-verify`** or bypass hooks. Fix the root cause instead.
 - **Always create a new branch** for each fix/feature, push it, open a PR, and
   let the user merge it. After the user says "merged / do the rest", tag the new
-  version (e.g. `git tag v1.3.8 && git push origin v1.3.8`).
+  version (e.g. `git tag v1.3.10 && git push origin v1.3.10`).
 - The user merges PRs himself and says "do the rest" — that means tag the version.
 - Do not add docstrings, refactor, or clean up code that wasn't touched.
+
+### Versioning rules (two separate strings)
+
+| File | When to bump | Format |
+|---|---|---|
+| `wifi_tool/version.py` | **Every PR** — shown in window title | Dev: add 4th decimal `1.3.9.1`, `1.3.9.2` / Release: bump 3rd `1.3.10` |
+| `installer/WifiTool.iss` `MyAppVersion` | **Release PRs only** — triggers installer rebuild (~7 min) | Same as release version e.g. `1.3.10` |
+
+During active development the user runs from source (`WifiTool.bat` → `python main.py`).
+Do NOT bump `WifiTool.iss` for dev PRs — only bump it when the user says they are cutting a release.
 
 ---
 
 ## Current version
 
-`1.3.8` (PR #19 open as of 2026-03-13, not yet merged).
+Last release: `1.3.9` (installer). Dev build: `1.3.10.2` (running from source).
 
 Version history:
 - v1.3.0 — unified attack orchestrator, mask attacks, WEP wordlist fallback
@@ -37,6 +44,31 @@ Version history:
             debug log window, shellexec post-install launch, wlansvc on close
 - v1.3.8 — PR #19: Scapy-based handshake capture on Windows (replaces airodump-ng),
             tkfont.Font fix for treeview
+- v1.3.9 — PR #20: fix sc.sendp() NPF interface resolution on Windows
+- dev builds since v1.3.9 (not yet released as installer):
+  - PR #21: WifiTool.bat pulls from GitHub before launching
+  - PR #22: fix sc.sniff() NPF interface resolution; version.py added; window title shows version
+  - PR #23: show git pull output in WifiTool.bat console
+  - PR #24: fix channel never set before Scapy capture; fix PMKID capture timeout; wordlist logging
+  - PR #25: fix git pull running as admin (pull before elevation in WifiTool.bat)
+
+---
+
+## Development workflow (no installer rebuild needed)
+
+The user runs from source during development — no installer build between PRs.
+
+```
+Double-click WifiTool.bat
+  → Pass 1 (normal user): git pull + pip install -r requirements.txt
+  → UAC prompt
+  → Pass 2 (admin): python main.py
+```
+
+Wordlists are copied from the installed version to `wordlists/` in the repo root
+(gitignored). `find_default_wordlist()` finds them via `Path(__file__).parent.parent.parent / "wordlists"`.
+
+Only rebuild the installer when the user explicitly says they are cutting a release.
 
 ---
 
@@ -46,15 +78,18 @@ Version history:
 WifiTool-main/
 ├── main.py                        # Entry point: --cli for TUI, else GUI
 ├── requirements.txt               # customtkinter>=5.2.0, rich>=13.0.0, scapy>=2.5.0
+├── WifiTool.bat                   # Dev launcher: git pull (as user) then python main.py (as admin)
 ├── WifiTool.spec                  # PyInstaller spec (uac_admin=True, console=False)
+├── wordlists/                     # gitignored — copied from installed version for dev use
 ├── installer/
 │   ├── WifiTool.iss               # Inno Setup script — defines MyAppVersion
 │   ├── build_installer.ps1        # Downloads assets, compiles installer
 │   └── assets/                   # aircrack-ng/, hashcat/, npcap-installer.exe,
 │                                  # wordlists/wifitool-wordlist-{wpa2,full}.txt
 ├── wifi_tool/
+│   ├── version.py                 # Single source of truth for version string (shown in window title)
 │   ├── tools/
-│   │   ├── system.py             # IS_WINDOWS, monitor mode, wlansvc, netsh helpers
+│   │   ├── system.py             # IS_WINDOWS, monitor mode, wlansvc, netsh, set_channel_windows
 │   │   ├── unified_attack.py     # UnifiedAttacker — the core attack orchestrator
 │   │   ├── pcap_utils.py         # Pure-Python Scapy capture + pcap→hc22000 converter
 │   │   ├── aircrack.py           # Wrappers: deauth, crack_wpa, check_handshake
@@ -81,19 +116,40 @@ WifiTool-main/
 ### Windows monitor mode flow (CRITICAL ORDER)
 
 ```
-1. get_npcap_device_name()   — netsh wlan show interfaces → \Device\NPF_{GUID}
-                                MUST happen before wlansvc is stopped
-2. enable_monitor_mode()     — WlanHelper.exe <iface> mode monitor
-                                WlanHelper NEEDS wlansvc running
-3. kill_interfering_processes() — net stop wlansvc
-                                stops wlansvc AFTER monitor mode is set
-4. [capture phase]
-5. finally: restart_wlansvc()   — net start wlansvc
-                                MUST happen before WlanHelper restore
-6. finally: disable_monitor_mode() — WlanHelper.exe <iface> mode managed
+1. get_npcap_device_name()      — netsh wlan show interfaces → \Device\NPF_{GUID}
+                                   MUST happen before wlansvc is stopped
+2. enable_monitor_mode()        — WlanHelper.exe <iface> mode monitor
+                                   WlanHelper NEEDS wlansvc running
+3. set_channel_windows()        — WlanHelper.exe <iface> channel <N>
+                                   Lock adapter to target AP's channel BEFORE stopping wlansvc.
+                                   Without this, Scapy sniffs on the wrong channel and captures nothing.
+4. kill_interfering_processes() — net stop wlansvc
+                                   stops wlansvc AFTER monitor mode and channel are set
+5. [capture phase]
+6. finally: restart_wlansvc()   — net start wlansvc
+                                   MUST happen before WlanHelper restore
+7. finally: disable_monitor_mode() — WlanHelper.exe <iface> mode managed
 ```
 
 Breaking this order causes `SetWlanOperationMode::myGUIDFromString error`.
+
+### Scapy interface resolution on Windows (CRITICAL)
+
+Both `sc.sniff()` and `sc.sendp()` on Windows require a `NetworkInterface` object
+from `sc.conf.ifaces`, **not** a raw `\Device\NPF_{GUID}` string. Passing the string
+causes `Interface '...' not found !`.
+
+Resolution pattern used in both `pcap_utils.py` and `unified_attack.py`:
+
+```python
+iface_obj = npf_string  # fallback
+for _obj in sc.conf.ifaces.values():
+    _pcap = getattr(_obj, "pcap_name", "") or getattr(_obj, "network_name", "")
+    if _pcap and _pcap.lower() == npf_string.lower():
+        iface_obj = _obj
+        break
+# then pass iface_obj to sc.sniff() / sc.sendp()
+```
 
 ### Two interface variables in UnifiedAttacker
 
@@ -149,6 +205,7 @@ Two bundled wordlists in `installer/assets/wordlists/`, installed to `{app}\word
 - `wifitool-wordlist-wpa2.txt` — 8-63 chars only (WPA2/WPA3 PSK requirement)
 - `wifitool-wordlist-full.txt` — unfiltered (WEP and other protocols)
 
+For dev: copy both to `wordlists/` at the repo root (gitignored).
 `find_default_wordlist()` → wpa2 list (or rockyou.txt on Linux).
 `find_full_wordlist()` → full list (used in `_phase_wep()` dictionary fallback).
 
@@ -234,7 +291,7 @@ Attack runs on a daemon thread.
 
 ## Installer (installer/WifiTool.iss)
 
-- **Version constant**: `#define MyAppVersion "1.3.8"` — ALWAYS update this
+- **Version constant**: `#define MyAppVersion "1.3.9"` — only update on release PRs
 - **AppId**: `{A9B5C3D2-4E6F-7890-ABCD-EF0123456789}`
 - **Output**: `Output/WifiTool-Setup-{version}.exe`
 - **Bundled tools**: aircrack-ng (`{app}\tools\aircrack-ng\`), hashcat (`{app}\tools\hashcat\`)
@@ -266,12 +323,17 @@ CI builds on push to `v*` tags (`.github/workflows/build-installer.yml`).
 
 ## Workflow
 
+### Dev PR (most PRs)
 1. User reports a bug or requests a feature
 2. Claude creates a branch: `fix/something` or `feature/something`
-3. Claude implements the fix, bumps the version in `WifiTool.iss`, commits, pushes, opens PR
-4. User merges the PR and says "do the rest"
-5. Claude tags the new version: `git tag v1.3.X && git push origin v1.3.X`
-6. CI builds the installer automatically
+3. Claude implements the fix, bumps **`wifi_tool/version.py`** (4th decimal e.g. `1.3.9.2`), commits, pushes, opens PR
+4. User merges — no tagging needed, no installer rebuild
+
+### Release PR (when user says "cut a release")
+1. Claude bumps **both** `wifi_tool/version.py` (3rd decimal e.g. `1.3.10`) **and** `installer/WifiTool.iss` `MyAppVersion`
+2. User merges and says "do the rest"
+3. Claude tags: `git tag v1.3.10 && git push origin v1.3.10`
+4. CI builds the installer automatically
 
 ---
 
@@ -295,3 +357,5 @@ CI builds on push to `v*` tags (`.github/workflows/build-installer.yml`).
   captured, investigate whether deauth is reaching the AP.
 - **Code signing**: The installer triggers Windows SmartScreen because it is not code-signed.
   User decided to skip code signing for now.
+- **PMKID capture timeout**: `capture_pmkid_eapol()` must always be called with
+  `timeout=CAPTURE_SECS`. Without it the sniff thread runs forever and blocks the next phase.
