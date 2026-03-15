@@ -158,7 +158,7 @@ class WifiToolApp(ctk.CTk):
         # Bottom bar
         bottom = ctk.CTkFrame(self, height=88, corner_radius=0)
         bottom.grid(row=2, column=0, sticky="ew")
-        bottom.columnconfigure(4, weight=1)
+        bottom.columnconfigure(5, weight=1)
 
         self._target_label = ctk.CTkLabel(
             bottom, text="No network selected", font=ctk.CTkFont(size=12)
@@ -186,8 +186,16 @@ class WifiToolApp(ctk.CTk):
         )
         self._fix_wlan_btn.grid(row=0, column=3, padx=(0, 12), pady=(8, 2))
 
+        self._unicast_deauth_var = ctk.BooleanVar(value=True)
+        self._unicast_switch = ctk.CTkSwitch(
+            bottom, text="Unicast Deauth",
+            variable=self._unicast_deauth_var,
+            onvalue=True, offvalue=False,
+        )
+        self._unicast_switch.grid(row=0, column=4, padx=(0, 16), pady=(8, 2))
+
         self._progress = ctk.CTkProgressBar(bottom, mode="indeterminate", width=280)
-        self._progress.grid(row=0, column=4, padx=16, pady=(8, 2), sticky="e")
+        self._progress.grid(row=0, column=5, padx=16, pady=(8, 2), sticky="e")
         self._progress.set(0)
 
         self._result_label = ctk.CTkLabel(
@@ -197,6 +205,15 @@ class WifiToolApp(ctk.CTk):
         )
         self._result_label.grid(
             row=1, column=0, columnspan=6, padx=12, pady=(0, 8), sticky="w"
+        )
+
+        self._client_count_label = ctk.CTkLabel(
+            bottom, text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#90caf9",
+        )
+        self._client_count_label.grid(
+            row=1, column=6, padx=(0, 12), pady=(0, 8), sticky="e"
         )
 
     def _build_treeview(self, parent: ctk.CTkFrame) -> ttk.Treeview:
@@ -487,6 +504,8 @@ class WifiToolApp(ctk.CTk):
             output_dir=out_dir,
             log_cb=self._queue_log,
             result_cb=self._on_result,
+            unicast_deauth=self._unicast_deauth_var.get(),
+            client_count_cb=self._on_client_count,
         )
         self._attack_thread = threading.Thread(
             target=self._attacker.run, daemon=True
@@ -523,6 +542,11 @@ class WifiToolApp(ctk.CTk):
             restart_wlansvc()
         self.destroy()
 
+    def _on_client_count(self, count: int) -> None:
+        """Called from the attack thread when the discovered client count changes."""
+        self.after(0, self._client_count_label.configure,
+                   {"text": f"Clients detected: {count}"})
+
     def _attack_ended(self) -> None:
         self._progress.stop()
         self._progress.set(0)
@@ -530,6 +554,7 @@ class WifiToolApp(ctk.CTk):
         self._attack_btn.configure(
             state="normal" if self._selected_net else "disabled"
         )
+        self._client_count_label.configure(text="")
 
     def _on_result(self, password: Optional[str]) -> None:
         self.after(0, self._show_result, password)
