@@ -86,6 +86,5 @@ session is explicitly ended.
 
 ## Security note
 
-`mcp_server.py` is gitignored — it is a local developer tool, not distributed
-to end users. It must only be used against networks you own or have explicit
-written authorisation to test.
+`mcp_server.py` is a developer tool committed to the repo. It must only be
+used against networks you own or have explicit written authorisation to test.
