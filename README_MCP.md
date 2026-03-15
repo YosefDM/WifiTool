@@ -18,13 +18,26 @@ pip install mcp
 
 ## Registration
 
-From the **repo root**, register the server with Claude Code:
+From the **repo root**, register the server with Claude Code using the **absolute path** to `mcp_server.py`:
 
 ```
-claude mcp add --transport stdio python mcp_server.py
+claude mcp add --transport stdio wifitool python "C:/Users/Yosef/Projects/WifiTool-main/mcp_server.py"
 ```
 
-The server runs as a subprocess — no persistent daemon needed.
+Command breakdown:
+- `wifitool` — the name Claude Code will use to identify this server
+- `python` — the interpreter to invoke
+- the last argument — **must be an absolute path**; a relative path fails if Claude Code's working directory differs from the repo root
+
+The server runs as a subprocess on demand — no persistent daemon needed.
+
+To verify the connection after registering:
+
+```
+claude mcp list
+```
+
+Look for `wifitool: ✓ Connected`. If it shows `✗ Failed`, check that `pip install mcp` has been run in the same Python environment.
 
 ---
 
