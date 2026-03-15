@@ -33,3 +33,6 @@ env/
 installer/assets/
 installer/Output/
 wordlists/
+
+# MCP server — local developer tool, not committed
+mcp_server.py

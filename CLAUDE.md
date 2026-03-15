@@ -363,3 +363,24 @@ CI builds on push to `v*` tags (`.github/workflows/build-installer.yml`).
   User decided to skip code signing for now.
 - **PMKID capture timeout**: `capture_pmkid_eapol()` must always be called with
   `timeout=CAPTURE_SECS`. Without it the sniff thread runs forever and blocks the next phase.
+
+---
+
+## MCP Developer Loop
+
+`mcp_server.py` provides Claude Code with autonomous iteration capability.
+The intended workflow is:
+
+1. Call `scan_networks()` to identify the target
+2. Call `run_attack()` against the authorised target
+3. Read the full output — identify what failed (no EAPOL, conversion error, hashcat issue, etc.)
+4. Call `read_source_file()` to inspect the relevant source before making any change
+5. Edit the source file directly on disk
+6. Call `fix_wlan()` if the adapter was left in a bad state between runs
+7. Call `run_attack()` again to verify
+8. Repeat until a password is returned
+9. Only then commit, push, and open a PR
+
+Claude must not open a PR mid-iteration. All code changes in a session should be
+batched into one PR opened only after a successful crack or after a deliberate
+decision to stop and document findings.
