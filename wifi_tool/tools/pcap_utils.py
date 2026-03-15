@@ -427,12 +427,22 @@ def capture_pmkid_eapol(
                         to_ds = bool(dot11.FCfield & 0x01)
                         from_ds = bool(dot11.FCfield & 0x02)
                         if to_ds and not from_ds:
+                            # STA→AP: the sending station is addr2
                             client_mac = dot11.addr2
                         elif not to_ds and from_ds:
+                            # AP→STA: the destination is addr1 — but skip
+                            # multicast destinations (01:00:5e:..., 33:33:...)
+                            # which are group addresses, not real clients.
                             client_mac = dot11.addr1
                         else:
                             client_mac = None
-                        if client_mac and client_mac not in ("ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00"):
+                        if client_mac:
+                            # Filter broadcast, all-zero, and IEEE multicast
+                            # (multicast bit = LSB of first octet).
+                            first_byte = int(client_mac.split(":")[0], 16)
+                            if first_byte & 0x01:
+                                client_mac = None  # multicast or broadcast
+                        if client_mac and client_mac != "00:00:00:00:00:00":
                             client_macs_out.add(client_mac.lower())
                     except Exception:
                         pass
