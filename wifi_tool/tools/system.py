@@ -304,6 +304,23 @@ def _enable_monitor_mode_windows(interface: str) -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def query_channel_windows(interface: str) -> Optional[str]:
+    """Return the current Wi-Fi channel reported by WlanHelper, or None on failure."""
+    helper = find_npcap_wlanhelper()
+    if not helper:
+        return None
+    try:
+        result = subprocess.run(
+            [helper, interface, "channel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return (result.stdout + result.stderr).strip() or None
+    except Exception:
+        return None
+
+
 def set_channel_windows(interface: str, channel: int) -> Tuple[bool, str]:
     """Set the Wi-Fi channel using Npcap's WlanHelper.exe (Windows only).
 
