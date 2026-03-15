@@ -370,8 +370,9 @@ def capture_pmkid_eapol(
     total_seen = 0
     target_seen = 0
     beacon_count = 0        # target beacons seen
-    data_count = 0          # target non-EAPOL data frames seen
-    eapol_count = 0         # EAPOL frames captured
+    data_enc = 0            # target type=2 frames with Protected bit set (encrypted)
+    data_open = 0           # target type=2 frames without Protected (may contain EAPOL)
+    eapol_count = 0         # EAPOL frames confirmed
     beacons_saved: set = set()   # BSSIDs for which we already saved a beacon
     _t0 = time.monotonic()
     _last_status = _t0
@@ -380,7 +381,7 @@ def capture_pmkid_eapol(
     _EAPOL_LLC_SNAP = b'\xaa\xaa\x03\x00\x00\x00\x88\x8e'
 
     def _handler(pkt) -> None:
-        nonlocal total_seen, target_seen, beacon_count, data_count, eapol_count, _last_status
+        nonlocal total_seen, target_seen, beacon_count, data_enc, data_open, eapol_count, _last_status
         total_seen += 1
         try:
             dot11 = pkt.getlayer("Dot11")
@@ -408,13 +409,29 @@ def capture_pmkid_eapol(
             is_eapol = pkt.haslayer("EAPOL")
             is_beacon = pkt.haslayer("Dot11Beacon")
 
-            # Fallback: detect EAPOL in 802.11 data frames via raw LLC/SNAP bytes.
-            # Scapy sometimes stores the Dot11 payload as Raw without dissecting
-            # the LLC/SNAP layer, so haslayer("EAPOL") returns False even though
-            # the frame carries a WPA 4-way handshake message.
-            if not is_eapol and dot11.type == 2:
-                if _EAPOL_LLC_SNAP in bytes(pkt):
-                    is_eapol = True
+            if dot11.type == 2:
+                # Check the Protected Frame bit (FCfield bit 6 = 0x40).
+                # Set   → WPA2-encrypted data; EAPOL never appears here.
+                # Clear → unencrypted data; EAPOL 4-way handshake lives here.
+                try:
+                    protected = bool(dot11.FCfield & 0x40)
+                except Exception:
+                    protected = False
+
+                if protected:
+                    data_enc += 1
+                else:
+                    data_open += 1
+                    # Fallback EAPOL detection via raw LLC/SNAP bytes.
+                    # Scapy sometimes stores the Dot11 payload as Raw without
+                    # dissecting the LLC/SNAP layer.
+                    if not is_eapol and _EAPOL_LLC_SNAP in bytes(pkt):
+                        is_eapol = True
+                    # Save ALL unprotected data frames — they are small (null
+                    # data, EAPOL) and aircrack-ng may find a handshake that
+                    # our Python converter misses.
+                    if not is_eapol:
+                        captured.append(pkt)
 
             if is_eapol:
                 eapol_count += 1
@@ -422,21 +439,17 @@ def capture_pmkid_eapol(
                 _log(f"[{elapsed}s] EAPOL frame #{eapol_count} captured!", "success")
             elif is_beacon:
                 beacon_count += 1
-                # Save only the first beacon per BSSID — that is enough for
-                # SSID lookup in convert_pcap_to_hc22000; saving every beacon
-                # floods the pcap and the log.
+                # Save only the first beacon per BSSID — enough for SSID lookup.
                 bssid_key = getattr(dot11, "addr3", None)
                 if bssid_key not in beacons_saved:
                     beacons_saved.add(bssid_key)
                     captured.append(pkt)
-            elif dot11.type == 2:
-                data_count += 1
 
             # Periodic status line — one per 10 s keeps the log readable
             if now - _last_status >= 10:
                 _log(
                     f"[{elapsed}s] ● {beacon_count} beacons "
-                    f"| {data_count} data frames "
+                    f"| {data_open} open / {data_enc} enc data "
                     f"| {eapol_count} EAPOL  (total: {total_seen})",
                     "info",
                 )
