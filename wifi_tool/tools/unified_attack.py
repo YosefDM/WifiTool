@@ -714,6 +714,12 @@ class UnifiedAttacker:
         cap_thread = threading.Thread(target=_do_cap, daemon=True)
         cap_thread.start()
 
+        self._log(
+            f"Tip: toggle Wi-Fi off/on on any device connected to '{self.target.ssid}' "
+            "to trigger a handshake without deauth.",
+            "info",
+        )
+
         # Resolve the Npcap interface object once for all deauth rounds.
         # sendp() on Windows requires a NetworkInterface object, not the raw
         # NPF path string.
