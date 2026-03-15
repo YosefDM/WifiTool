@@ -296,6 +296,7 @@ def capture_pmkid_eapol(
     bssid_filter: Optional[str] = None,
     timeout: Optional[int] = None,
     log_cb=None,
+    client_macs_out: Optional[set] = None,
 ) -> int:
     """Capture PMKID frames and WPA handshakes using scapy + Npcap.
 
@@ -418,6 +419,24 @@ def capture_pmkid_eapol(
                 except Exception:
                     protected = False
 
+                # Extract client MAC from DS direction bits.
+                # ToDS=1, FromDS=0 → STA→AP: client is addr2
+                # ToDS=0, FromDS=1 → AP→STA: client is addr1
+                if client_macs_out is not None:
+                    try:
+                        to_ds = bool(dot11.FCfield & 0x01)
+                        from_ds = bool(dot11.FCfield & 0x02)
+                        if to_ds and not from_ds:
+                            client_mac = dot11.addr2
+                        elif not to_ds and from_ds:
+                            client_mac = dot11.addr1
+                        else:
+                            client_mac = None
+                        if client_mac and client_mac not in ("ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00"):
+                            client_macs_out.add(client_mac.lower())
+                    except Exception:
+                        pass
+
                 if protected:
                     data_enc += 1
                 else:
@@ -477,7 +496,7 @@ def capture_pmkid_eapol(
         return 1
 
     _log(
-        f"Capture done — {beacon_count} beacons | {data_count} data | "
+        f"Capture done — {beacon_count} beacons | {data_open} open / {data_enc} enc data | "
         f"{eapol_count} EAPOL | {total_seen} total frames seen",
         "info",
     )

