@@ -4,6 +4,7 @@ Runs in a background thread.  Progress is reported via log_cb(message, level)
 and the final result via result_cb(password_or_None).
 """
 
+import shutil
 import subprocess
 import threading
 import time
@@ -188,6 +189,16 @@ class UnifiedAttacker:
                 if "error code = 50" not in result and "not supported" not in result.lower():
                     self._log(f"Monitor mode failed: {result}", "warn")
                 self._log("Continuing in managed mode (capture may fail)", "warn")
+
+            # Diagnostic: log hashcat availability and path
+            hashcat_path = shutil.which("hashcat")
+            if hashcat_path:
+                self._log(f"hashcat found: {hashcat_path}", "info")
+            else:
+                self._log("hashcat NOT found on PATH — cracking phases will be skipped", "warn")
+
+            # Diagnostic: output directory
+            self._log(f"Capture output dir: {self.output_dir}", "info")
 
             # Lock the adapter to the target AP's channel BEFORE stopping wlansvc.
             # WlanHelper needs wlansvc running to talk to the WLAN API.
@@ -424,6 +435,7 @@ class UnifiedAttacker:
                         self._scapy_iface, cap_file,
                         bssid_filter=self.target.bssid,
                         timeout=self.CAPTURE_SECS,
+                        log_cb=self._log,
                     )
                 finally:
                     done.set()
@@ -647,6 +659,7 @@ class UnifiedAttacker:
                     cap_file,
                     bssid_filter=self.target.bssid,
                     timeout=self.CAPTURE_SECS,
+                    log_cb=self._log,
                 )
             except Exception as exc:
                 cap_exc.append(exc)
