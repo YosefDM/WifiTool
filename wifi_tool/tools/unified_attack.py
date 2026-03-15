@@ -20,6 +20,7 @@ from .system import (
     get_npcap_device_name,
     kill_interfering_processes,
     restart_wlansvc,
+    set_channel_windows,
 )
 from . import aircrack, hashcat_tool, hcx, krack as krack_tool, wifite as wifite_tool
 
@@ -187,6 +188,29 @@ class UnifiedAttacker:
                 if "error code = 50" not in result and "not supported" not in result.lower():
                     self._log(f"Monitor mode failed: {result}", "warn")
                 self._log("Continuing in managed mode (capture may fail)", "warn")
+
+            # Lock the adapter to the target AP's channel BEFORE stopping wlansvc.
+            # WlanHelper needs wlansvc running to talk to the WLAN API.
+            # Without this, Scapy sniffs on whatever channel the adapter was last
+            # on and captures nothing from the target AP.
+            if IS_WINDOWS and self.target.channel:
+                ch_ok, ch_msg = set_channel_windows(self._cap_iface, self.target.channel)
+                if ch_ok:
+                    self._log(f"Channel locked to {self.target.channel}", "info")
+                else:
+                    self._log(
+                        f"Channel lock failed (capture may miss packets): {ch_msg}", "warn"
+                    )
+
+            # Log which wordlist will be used so it's visible in the attack log.
+            if self.wordlist:
+                self._log(f"Wordlist: {Path(self.wordlist).name}", "info")
+            else:
+                self._log(
+                    "No wordlist found — mask attacks only "
+                    "(8-digit, 6-digit, 10-digit numbers; 8-char lowercase)",
+                    "warn",
+                )
 
             # NOW stop processes that compete for the adapter during capture.
             # wlansvc holds the NIC in managed mode and interferes with raw
@@ -399,6 +423,7 @@ class UnifiedAttacker:
                     capture_pmkid_eapol(
                         self._scapy_iface, cap_file,
                         bssid_filter=self.target.bssid,
+                        timeout=self.CAPTURE_SECS,
                     )
                 finally:
                     done.set()

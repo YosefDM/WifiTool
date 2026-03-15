@@ -304,6 +304,32 @@ def _enable_monitor_mode_windows(interface: str) -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def set_channel_windows(interface: str, channel: int) -> Tuple[bool, str]:
+    """Set the Wi-Fi channel using Npcap's WlanHelper.exe (Windows only).
+
+    Must be called while wlansvc is still running (before kill_interfering_processes).
+    The interface name must be the friendly name returned by WlanHelper (e.g. "Wi-Fi 2").
+    """
+    helper = find_npcap_wlanhelper()
+    if not helper:
+        return False, "WlanHelper not found"
+    try:
+        result = subprocess.run(
+            [helper, interface, "channel", str(channel)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode == 0 and "error" not in output.lower():
+            return True, output
+        return False, output or f"WlanHelper exited with code {result.returncode}"
+    except subprocess.TimeoutExpired:
+        return False, "WlanHelper timed out setting channel"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def _disable_monitor_mode_windows(interface: str) -> Tuple[bool, str]:
     """Disable monitor mode on Windows using Npcap's WlanHelper.exe."""
     helper = find_npcap_wlanhelper()
