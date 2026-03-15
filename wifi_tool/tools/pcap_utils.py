@@ -294,6 +294,7 @@ def capture_pmkid_eapol(
     output_file: str,
     bssid_filter: Optional[str] = None,
     timeout: Optional[int] = None,
+    log_cb=None,
 ) -> int:
     """Capture PMKID frames and WPA handshakes using scapy + Npcap.
 
@@ -311,12 +312,21 @@ def capture_pmkid_eapol(
     Requires ``scapy`` (``pip install scapy``) and Npcap
     (https://npcap.com) with raw 802.11 support enabled.
 
+    *log_cb* is an optional callable ``(message: str, level: str) -> None``
+    used to route output to the GUI log.  Falls back to ``print`` if omitted.
+
     Press Ctrl+C to stop.  Returns 0 on success, 1 on error.
     """
+    def _log(msg: str, level: str = "info") -> None:
+        if log_cb:
+            log_cb(msg, level)
+        else:
+            print(msg)
+
     try:
         sc = _require_scapy()
     except ImportError as exc:
-        print(str(exc))
+        _log(str(exc), "error")
         return 1
 
     bssid_filter_b: Optional[bytes] = None
@@ -324,39 +334,13 @@ def capture_pmkid_eapol(
         try:
             bssid_filter_b = bytes.fromhex(bssid_filter.replace(":", "").lower())
         except ValueError:
-            print(f"[!] Invalid BSSID filter: {bssid_filter!r}")
+            _log(f"Invalid BSSID filter: {bssid_filter!r}", "error")
             return 1
 
-    captured: list = []
-
-    def _handler(pkt) -> None:
-        try:
-            if bssid_filter_b:
-                dot11 = pkt.getlayer("Dot11")
-                if dot11 is None:
-                    return
-                bssid_str = dot11.addr3
-                if not bssid_str:
-                    return
-                try:
-                    if _mac_bytes(bssid_str) != bssid_filter_b:
-                        return
-                except ValueError:
-                    return
-            if pkt.haslayer("EAPOL") or pkt.haslayer("Dot11Beacon"):
-                captured.append(pkt)
-                print(
-                    f"\r  [+] {len(captured):4d} packet(s) captured",
-                    end="",
-                    flush=True,
-                )
-        except Exception:
-            pass
-
-    # On Windows, sc.sniff() requires a NetworkInterface object rather than
-    # a raw \Device\NPF_{GUID} string.  Resolve it from conf.ifaces; fall
-    # back to the original string if no match is found.
+    # Resolve NetworkInterface object — sc.sniff() on Windows needs this,
+    # not the raw \Device\NPF_{GUID} string.
     iface_obj = interface
+    iface_resolved = False
     try:
         for _obj in sc.conf.ifaces.values():
             _pcap = (
@@ -365,14 +349,72 @@ def capture_pmkid_eapol(
             )
             if _pcap and _pcap.lower() == interface.lower():
                 iface_obj = _obj
+                iface_resolved = True
                 break
     except Exception:
         pass
 
-    print(
-        f"[*] Sniffing on {interface!r} (Ctrl+C to stop)\n"
-        "    Waiting for EAPOL handshakes and beacon frames…"
+    _log(
+        f"Scapy interface resolved: {getattr(iface_obj, 'name', interface)!r}"
+        f" (matched={iface_resolved})",
+        "info",
     )
+
+    # Dump all Scapy-visible interfaces for diagnostics
+    try:
+        iface_names = [
+            f"{getattr(o, 'name', '?')} / {getattr(o, 'pcap_name', '') or getattr(o, 'network_name', '?')}"
+            for o in sc.conf.ifaces.values()
+        ]
+        _log(f"All Scapy interfaces: {'; '.join(iface_names)}", "info")
+    except Exception:
+        pass
+
+    captured: list = []
+    total_seen = 0          # every packet sniff() delivers
+    target_seen = 0         # packets from the target BSSID (any type)
+    frame_types: Dict[str, int] = {}
+
+    def _handler(pkt) -> None:
+        nonlocal total_seen, target_seen
+        total_seen += 1
+        try:
+            dot11 = pkt.getlayer("Dot11")
+            if dot11 is None:
+                return
+
+            # Track frame type breakdown for diagnostics
+            try:
+                ftype = f"type={dot11.type}/subtype={dot11.subtype}"
+                frame_types[ftype] = frame_types.get(ftype, 0) + 1
+            except Exception:
+                pass
+
+            # Check if this packet is from the target BSSID
+            bssid_str = dot11.addr3
+            if bssid_filter_b and bssid_str:
+                try:
+                    if _mac_bytes(bssid_str) != bssid_filter_b:
+                        return
+                except ValueError:
+                    return
+            elif bssid_filter_b:
+                return
+
+            target_seen += 1
+
+            if pkt.haslayer("EAPOL") or pkt.haslayer("Dot11Beacon"):
+                captured.append(pkt)
+                _log(
+                    f"Captured {len(captured)} frame(s) from target "
+                    f"({'EAPOL' if pkt.haslayer('EAPOL') else 'Beacon'})"
+                    f" | total seen: {total_seen} | from target: {target_seen}",
+                    "info",
+                )
+        except Exception:
+            pass
+
+    _log(f"Sniffing on {interface!r} for up to {timeout}s — waiting for 802.11 frames…", "info")
     try:
         sc.sniff(
             iface=iface_obj,
@@ -383,10 +425,17 @@ def capture_pmkid_eapol(
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        print(f"\n[!] Capture error: {exc}")
+        _log(f"Capture error: {exc}", "error")
         return 1
 
-    print(f"\n[*] Total captured: {len(captured)} packet(s)")
+    _log(
+        f"Capture done — total pkts seen: {total_seen} | "
+        f"from target BSSID: {target_seen} | saved (EAPOL+Beacon): {len(captured)}",
+        "info",
+    )
+    if frame_types:
+        summary = ", ".join(f"{k}:{v}" for k, v in sorted(frame_types.items()))
+        _log(f"Frame type breakdown: {summary}", "info")
 
     if not captured:
         print(
