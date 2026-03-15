@@ -408,11 +408,27 @@ def capture_pmkid_eapol(
 
             target_seen += 1
 
-            if pkt.haslayer("EAPOL") or pkt.haslayer("Dot11Beacon"):
+            is_eapol = pkt.haslayer("EAPOL")
+            is_beacon = pkt.haslayer("Dot11Beacon")
+
+            # Fallback EAPOL detection for 802.11 data frames (type=2).
+            # Scapy sometimes stops dissecting at Dot11 and leaves the payload
+            # as Raw, so haslayer("EAPOL") returns False even though the frame
+            # carries an EAPOL 4-way handshake message.
+            # EAPOL over 802.11 is always preceded by an LLC/SNAP header:
+            #   AA AA 03 00-00-00 88-8E
+            # This sequence is extremely unlikely in encrypted data payloads.
+            if not is_eapol and dot11.type == 2:
+                raw_pkt = bytes(pkt)
+                if b'\xaa\xaa\x03\x00\x00\x00\x88\x8e' in raw_pkt:
+                    is_eapol = True
+                    _log("EAPOL detected via raw LLC/SNAP bytes", "info")
+
+            if is_eapol or is_beacon:
                 captured.append(pkt)
                 _log(
                     f"Captured {len(captured)} frame(s) from target "
-                    f"({'EAPOL' if pkt.haslayer('EAPOL') else 'Beacon'})"
+                    f"({'EAPOL' if is_eapol else 'Beacon'})"
                     f" | total seen: {total_seen} | from target: {target_seen}",
                     "info",
                 )
