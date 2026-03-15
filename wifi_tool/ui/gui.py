@@ -10,6 +10,7 @@ Layout
 
 import datetime
 import queue
+import re
 import subprocess
 import threading
 import tkinter as tk
@@ -63,6 +64,14 @@ class WifiToolApp(ctk.CTk):
         self._debug_win: Optional[ctk.CTkToplevel] = None
         self._debug_box: Optional[ctk.CTkTextbox] = None
 
+        # Live capture stats (updated by parsing log messages)
+        self._stat_phase = ""
+        self._stat_beacons = 0
+        self._stat_enc = 0
+        self._stat_open = 0
+        self._stat_eapol = 0
+        self._stat_clients = 0
+
         self._build_ui()
         self._build_menubar()
         self._refresh_interfaces()
@@ -76,7 +85,7 @@ class WifiToolApp(ctk.CTk):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(1, weight=1)  # content row expands
 
         # Toolbar
         toolbar = ctk.CTkFrame(self, height=52, corner_radius=0)
@@ -155,9 +164,12 @@ class WifiToolApp(ctk.CTk):
         )
         self._log_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
+        # Stats panel (row 2)
+        self._build_stats_panel()
+
         # Bottom bar
         bottom = ctk.CTkFrame(self, height=88, corner_radius=0)
-        bottom.grid(row=2, column=0, sticky="ew")
+        bottom.grid(row=3, column=0, sticky="ew")
         bottom.columnconfigure(5, weight=1)
 
         self._target_label = ctk.CTkLabel(
@@ -207,14 +219,6 @@ class WifiToolApp(ctk.CTk):
             row=1, column=0, columnspan=6, padx=12, pady=(0, 8), sticky="w"
         )
 
-        self._client_count_label = ctk.CTkLabel(
-            bottom, text="",
-            font=ctk.CTkFont(size=12),
-            text_color="#90caf9",
-        )
-        self._client_count_label.grid(
-            row=1, column=6, padx=(0, 12), pady=(0, 8), sticky="e"
-        )
 
     def _build_treeview(self, parent: ctk.CTkFrame) -> ttk.Treeview:
         style = ttk.Style()
@@ -247,6 +251,67 @@ class WifiToolApp(ctk.CTk):
             tree.heading(col, text=col)
             tree.column(col, width=widths[col], minwidth=40)
         return tree
+
+    def _build_stats_panel(self) -> None:
+        """Horizontal stats strip shown between content and bottom bar."""
+        panel = ctk.CTkFrame(self, height=72, corner_radius=0, fg_color="#1e1e2e")
+        panel.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
+        panel.grid_propagate(False)
+
+        def _card(parent, col, label, initial="—", width=130):
+            f = ctk.CTkFrame(parent, fg_color="#2a2a3e", corner_radius=8)
+            f.grid(row=0, column=col, padx=6, pady=8, sticky="nsew")
+            ctk.CTkLabel(f, text=label,
+                         font=ctk.CTkFont(size=10), text_color="#888aaa").pack(pady=(6, 0))
+            val = ctk.CTkLabel(f, text=initial,
+                               font=ctk.CTkFont(size=14, weight="bold"),
+                               text_color="#e0e0e0", width=width)
+            val.pack(pady=(0, 6))
+            return val
+
+        for i in range(7):
+            panel.columnconfigure(i, weight=1)
+
+        self._sl_phase   = _card(panel, 0, "PHASE",          "—",  150)
+        self._sl_beacons = _card(panel, 1, "BEACONS",        "0")
+        self._sl_clients = _card(panel, 2, "CLIENTS",        "0")
+        self._sl_enc     = _card(panel, 3, "ENC FRAMES",     "0")
+        self._sl_open    = _card(panel, 4, "OPEN FRAMES",    "0")
+        self._sl_eapol   = _card(panel, 5, "EAPOL",          "0",  90)
+        self._sl_mfp     = _card(panel, 6, "802.11w MFP",    "?",  110)
+
+    def _update_stats_display(self) -> None:
+        """Refresh all stat card values from current state."""
+        phase_short = self._stat_phase.replace("Attack", "").replace("Handshake", "HS").strip(" -")
+        self._sl_phase.configure(text=phase_short or "—")
+        self._sl_beacons.configure(text=str(self._stat_beacons))
+        self._sl_clients.configure(text=str(self._stat_clients))
+        self._sl_enc.configure(text=str(self._stat_enc))
+        self._sl_open.configure(text=str(self._stat_open))
+
+        eapol = self._stat_eapol
+        self._sl_eapol.configure(
+            text=str(eapol),
+            text_color="#4caf50" if eapol > 0 else "#e0e0e0",
+        )
+
+        total_data = self._stat_enc + self._stat_open
+        if total_data == 0:
+            mfp_text, mfp_color = "?", "#888aaa"
+        elif self._stat_open == 0:
+            mfp_text, mfp_color = "⚠ ACTIVE", "#ff9800"
+        else:
+            mfp_text, mfp_color = "✓ NO", "#4caf50"
+        self._sl_mfp.configure(text=mfp_text, text_color=mfp_color)
+
+    def _reset_stats(self) -> None:
+        self._stat_phase = ""
+        self._stat_beacons = 0
+        self._stat_enc = 0
+        self._stat_open = 0
+        self._stat_eapol = 0
+        self._stat_clients = 0
+        self._update_stats_display()
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -484,6 +549,7 @@ class WifiToolApp(ctk.CTk):
         out_dir = Path.home() / "wifitool-output" / (target.ssid or "unknown")
 
         self._clear_log()
+        self._reset_stats()
         self._result_label.configure(text="")
         self._attack_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
@@ -544,8 +610,8 @@ class WifiToolApp(ctk.CTk):
 
     def _on_client_count(self, count: int) -> None:
         """Called from the attack thread when the discovered client count changes."""
-        self.after(0, self._client_count_label.configure,
-                   {"text": f"Clients detected: {count}"})
+        self._stat_clients = count
+        self.after(0, self._update_stats_display)
 
     def _attack_ended(self) -> None:
         self._progress.stop()
@@ -554,7 +620,6 @@ class WifiToolApp(ctk.CTk):
         self._attack_btn.configure(
             state="normal" if self._selected_net else "disabled"
         )
-        self._client_count_label.configure(text="")
 
     def _on_result(self, password: Optional[str]) -> None:
         self.after(0, self._show_result, password)
@@ -599,6 +664,35 @@ class WifiToolApp(ctk.CTk):
         self._log_box.configure(state="disabled")
         self._log_box.see("end")
         self._debug_append(message, level)
+        self._parse_stats(message, level)
+
+    def _parse_stats(self, message: str, level: str) -> None:
+        """Extract live capture stats from log messages and update the panel."""
+        # Phase header: "--- Phase: WPA/WPA2 Handshake Attack ---"
+        m = re.search(r"--- Phase: (.+?) ---", message)
+        if m:
+            self._stat_phase = m.group(1)
+            self._update_stats_display()
+            return
+
+        # Periodic status: "[10s] ● 94 beacons | 0 open / 18 enc data | 0 EAPOL"
+        m = re.search(
+            r"\[(\d+)s\].*?(\d+) beacons.*?(\d+) open / (\d+) enc.*?(\d+) EAPOL",
+            message,
+        )
+        if m:
+            self._stat_beacons = int(m.group(2))
+            self._stat_open    = int(m.group(3))
+            self._stat_enc     = int(m.group(4))
+            self._stat_eapol   = int(m.group(5))
+            self._update_stats_display()
+            return
+
+        # EAPOL captured mid-capture (instant update)
+        m = re.search(r"EAPOL frame #(\d+) captured", message)
+        if m:
+            self._stat_eapol = int(m.group(1))
+            self._update_stats_display()
 
     def _clear_log(self) -> None:
         self._log_box.configure(state="normal")
