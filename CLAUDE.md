@@ -19,6 +19,10 @@ GitHub: https://github.com/YosefDM/WifiTool
   version (e.g. `git tag v1.3.10 && git push origin v1.3.10`).
 - The user merges PRs himself and says "do the rest" — that means tag the version.
 - Do not add docstrings, refactor, or clean up code that wasn't touched.
+- **Before every commit/push, run `gh pr list --state all --limit 20` to check
+  which PRs are open vs merged.** Never push new commits onto a branch whose PR
+  is already merged — create a new branch instead. Do this check at the start of
+  any session where work is continuing from a previous conversation.
 
 ### Versioning rules (two separate strings)
 
