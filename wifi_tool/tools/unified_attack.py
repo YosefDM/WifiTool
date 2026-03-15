@@ -20,6 +20,7 @@ from .system import (
     get_hashcat_dir,
     get_npcap_device_name,
     kill_interfering_processes,
+    query_channel_windows,
     restart_wlansvc,
     set_channel_windows,
 )
@@ -55,17 +56,20 @@ _COMMON_WORDLISTS: List[str] = [
 ]
 
 
-def _search_wordlist(names: List[str]) -> Optional[str]:
+def _search_wordlist(names: List[str], log_cb=None) -> Optional[str]:
     """Search common locations for the first matching wordlist filename."""
     import sys
     for base in [Path(sys.executable).parent, Path(__file__).parent.parent.parent]:
         for name in names:
             candidate = base / "wordlists" / name
+            if log_cb:
+                log_cb(f"Wordlist search: {candidate}", "info")
             if candidate.exists():
                 return str(candidate)
-        # Also check bare repo root for convenience during development
         for name in names:
             candidate = base / name
+            if log_cb:
+                log_cb(f"Wordlist search: {candidate}", "info")
             if candidate.exists():
                 return str(candidate)
     return None
@@ -212,16 +216,31 @@ class UnifiedAttacker:
                     self._log(
                         f"Channel lock failed (capture may miss packets): {ch_msg}", "warn"
                     )
+                # Verify WlanHelper actually applied the channel
+                actual_ch = query_channel_windows(self._cap_iface)
+                if actual_ch:
+                    self._log(f"WlanHelper reports channel now: {actual_ch}", "info")
 
-            # Log which wordlist will be used so it's visible in the attack log.
+            # Log which wordlist will be used. If none was found yet, re-try
+            # with path logging so we can see exactly what was checked.
             if self.wordlist:
-                self._log(f"Wordlist: {Path(self.wordlist).name}", "info")
+                self._log(f"Wordlist: {self.wordlist}", "info")
             else:
-                self._log(
-                    "No wordlist found — mask attacks only "
-                    "(8-digit, 6-digit, 10-digit numbers; 8-char lowercase)",
-                    "warn",
+                self._log("Wordlist not found — checking search paths:", "warn")
+                found = _search_wordlist(
+                    ["wifitool-wordlist-wpa2.txt", "wifitool-wordlist-full.txt",
+                     "rockyou.txt", "wordlist.txt"],
+                    log_cb=self._log,
                 )
+                if found:
+                    self.wordlist = found
+                    self._log(f"Wordlist found on retry: {found}", "success")
+                else:
+                    self._log(
+                        "No wordlist found — mask attacks only "
+                        "(8-digit, 6-digit, 10-digit numbers; 8-char lowercase)",
+                        "warn",
+                    )
 
             # NOW stop processes that compete for the adapter during capture.
             # wlansvc holds the NIC in managed mode and interferes with raw
@@ -232,6 +251,11 @@ class UnifiedAttacker:
                 self._log(kill_output, "output")
             if IS_WINDOWS and kill_output and "stopped successfully" in kill_output.lower():
                 self._wlansvc_stopped = True
+                # Give the adapter 2 seconds to settle after wlansvc stops.
+                # Without this, the first capture phase sees 0 packets because
+                # the adapter hasn't fully transitioned to raw 802.11 mode yet.
+                self._log("Waiting for adapter to settle...", "info")
+                time.sleep(2)
 
             if self._stop.is_set():
                 self._on_result(None)

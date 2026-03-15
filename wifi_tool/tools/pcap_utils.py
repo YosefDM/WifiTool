@@ -390,16 +390,21 @@ def capture_pmkid_eapol(
             except Exception:
                 pass
 
-            # Check if this packet is from the target BSSID
-            bssid_str = dot11.addr3
-            if bssid_filter_b and bssid_str:
-                try:
-                    if _mac_bytes(bssid_str) != bssid_filter_b:
-                        return
-                except ValueError:
+            # Check if this packet is from/to the target BSSID
+            # Check addr1, addr2, addr3 — AP MAC appears in different fields
+            # depending on frame direction (data vs management vs control)
+            if bssid_filter_b:
+                matched = False
+                for _addr in (dot11.addr1, dot11.addr2, dot11.addr3):
+                    if _addr:
+                        try:
+                            if _mac_bytes(_addr) == bssid_filter_b:
+                                matched = True
+                                break
+                        except ValueError:
+                            pass
+                if not matched:
                     return
-            elif bssid_filter_b:
-                return
 
             target_seen += 1
 
