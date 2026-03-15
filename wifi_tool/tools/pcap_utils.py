@@ -19,6 +19,7 @@ when the native Linux tools are unavailable.
 """
 
 import struct
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -354,45 +355,39 @@ def capture_pmkid_eapol(
     except Exception:
         pass
 
+    iface_name = getattr(iface_obj, "name", interface)
+    try:
+        iface_count = len(list(sc.conf.ifaces.values()))
+    except Exception:
+        iface_count = "?"
     _log(
-        f"Scapy interface resolved: {getattr(iface_obj, 'name', interface)!r}"
-        f" (matched={iface_resolved})",
+        f"Capture interface: {iface_name!r} "
+        f"(matched={iface_resolved}, {iface_count} adapters visible to Scapy)",
         "info",
     )
 
-    # Dump all Scapy-visible interfaces for diagnostics
-    try:
-        iface_names = [
-            f"{getattr(o, 'name', '?')} / {getattr(o, 'pcap_name', '') or getattr(o, 'network_name', '?')}"
-            for o in sc.conf.ifaces.values()
-        ]
-        _log(f"All Scapy interfaces: {'; '.join(iface_names)}", "info")
-    except Exception:
-        pass
-
     captured: list = []
-    total_seen = 0          # every packet sniff() delivers
-    target_seen = 0         # packets from the target BSSID (any type)
-    frame_types: Dict[str, int] = {}
+    total_seen = 0
+    target_seen = 0
+    beacon_count = 0        # target beacons seen
+    data_count = 0          # target non-EAPOL data frames seen
+    eapol_count = 0         # EAPOL frames captured
+    beacons_saved: set = set()   # BSSIDs for which we already saved a beacon
+    _t0 = time.monotonic()
+    _last_status = _t0
+
+    # LLC/SNAP header preceding EAPOL in 802.11 data frames
+    _EAPOL_LLC_SNAP = b'\xaa\xaa\x03\x00\x00\x00\x88\x8e'
 
     def _handler(pkt) -> None:
-        nonlocal total_seen, target_seen
+        nonlocal total_seen, target_seen, beacon_count, data_count, eapol_count, _last_status
         total_seen += 1
         try:
             dot11 = pkt.getlayer("Dot11")
             if dot11 is None:
                 return
 
-            # Track frame type breakdown for diagnostics
-            try:
-                ftype = f"type={dot11.type}/subtype={dot11.subtype}"
-                frame_types[ftype] = frame_types.get(ftype, 0) + 1
-            except Exception:
-                pass
-
-            # Check if this packet is from/to the target BSSID
-            # Check addr1, addr2, addr3 — AP MAC appears in different fields
-            # depending on frame direction (data vs management vs control)
+            # BSSID filter — AP MAC can appear in addr1, addr2, or addr3
             if bssid_filter_b:
                 matched = False
                 for _addr in (dot11.addr1, dot11.addr2, dot11.addr3):
@@ -407,35 +402,49 @@ def capture_pmkid_eapol(
                     return
 
             target_seen += 1
+            now = time.monotonic()
+            elapsed = int(now - _t0)
 
             is_eapol = pkt.haslayer("EAPOL")
             is_beacon = pkt.haslayer("Dot11Beacon")
 
-            # Fallback EAPOL detection for 802.11 data frames (type=2).
-            # Scapy sometimes stops dissecting at Dot11 and leaves the payload
-            # as Raw, so haslayer("EAPOL") returns False even though the frame
-            # carries an EAPOL 4-way handshake message.
-            # EAPOL over 802.11 is always preceded by an LLC/SNAP header:
-            #   AA AA 03 00-00-00 88-8E
-            # This sequence is extremely unlikely in encrypted data payloads.
+            # Fallback: detect EAPOL in 802.11 data frames via raw LLC/SNAP bytes.
+            # Scapy sometimes stores the Dot11 payload as Raw without dissecting
+            # the LLC/SNAP layer, so haslayer("EAPOL") returns False even though
+            # the frame carries a WPA 4-way handshake message.
             if not is_eapol and dot11.type == 2:
-                raw_pkt = bytes(pkt)
-                if b'\xaa\xaa\x03\x00\x00\x00\x88\x8e' in raw_pkt:
+                if _EAPOL_LLC_SNAP in bytes(pkt):
                     is_eapol = True
-                    _log("EAPOL detected via raw LLC/SNAP bytes", "info")
 
-            if is_eapol or is_beacon:
+            if is_eapol:
+                eapol_count += 1
                 captured.append(pkt)
+                _log(f"[{elapsed}s] EAPOL frame #{eapol_count} captured!", "success")
+            elif is_beacon:
+                beacon_count += 1
+                # Save only the first beacon per BSSID — that is enough for
+                # SSID lookup in convert_pcap_to_hc22000; saving every beacon
+                # floods the pcap and the log.
+                bssid_key = getattr(dot11, "addr3", None)
+                if bssid_key not in beacons_saved:
+                    beacons_saved.add(bssid_key)
+                    captured.append(pkt)
+            elif dot11.type == 2:
+                data_count += 1
+
+            # Periodic status line — one per 10 s keeps the log readable
+            if now - _last_status >= 10:
                 _log(
-                    f"Captured {len(captured)} frame(s) from target "
-                    f"({'EAPOL' if is_eapol else 'Beacon'})"
-                    f" | total seen: {total_seen} | from target: {target_seen}",
+                    f"[{elapsed}s] ● {beacon_count} beacons "
+                    f"| {data_count} data frames "
+                    f"| {eapol_count} EAPOL  (total: {total_seen})",
                     "info",
                 )
+                _last_status = now
         except Exception:
             pass
 
-    _log(f"Sniffing on {interface!r} for up to {timeout}s — waiting for 802.11 frames…", "info")
+    _log(f"Sniffing on {iface_name!r} for up to {timeout}s…", "info")
     try:
         # monitor=True tells Npcap to open the interface with RFMON (raw 802.11)
         # mode requested at the pcap layer.  Without this flag Npcap may open
@@ -455,33 +464,28 @@ def capture_pmkid_eapol(
         return 1
 
     _log(
-        f"Capture done — total pkts seen: {total_seen} | "
-        f"from target BSSID: {target_seen} | saved (EAPOL+Beacon): {len(captured)}",
+        f"Capture done — {beacon_count} beacons | {data_count} data | "
+        f"{eapol_count} EAPOL | {total_seen} total frames seen",
         "info",
     )
-    if frame_types:
-        summary = ", ".join(f"{k}:{v}" for k, v in sorted(frame_types.items()))
-        _log(f"Frame type breakdown: {summary}", "info")
 
     if not captured:
         if total_seen == 0:
             _log(
-                "No 802.11 frames received at all. "
+                "No 802.11 frames received. "
                 "Verify the adapter is in monitor mode and Npcap is installed "
                 "with 'Support raw 802.11 traffic' enabled.",
                 "warn",
             )
         elif target_seen == 0:
             _log(
-                f"Captured {total_seen} frame(s) but none from the target BSSID. "
-                "The adapter may be on the wrong channel — check that the AP channel "
-                "from the scan matches the channel the adapter is locked to.",
+                f"Saw {total_seen} frame(s) but none matched the target BSSID. "
+                "Adapter may be on the wrong channel.",
                 "warn",
             )
         else:
             _log(
-                f"Captured {target_seen} frame(s) from target but no EAPOL handshake. "
-                "No client reconnected during the capture window.",
+                "No EAPOL handshake captured — no client reconnected during the window.",
                 "warn",
             )
         return 1
