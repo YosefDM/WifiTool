@@ -30,6 +30,8 @@ The server runs as a subprocess — no persistent daemon needed.
 
 ## Available tools
 
+### Core iteration loop
+
 | Tool | Purpose |
 |---|---|
 | `run_attack(ssid, bssid, channel, encryption, interface, wordlist_path?)` | Run a full attack via `python main.py --cli` and return all output |
@@ -38,10 +40,27 @@ The server runs as a subprocess — no persistent daemon needed.
 | `read_file(path)` | Read any text file by absolute path |
 | `check_tools()` | Show which external tools (hashcat, aircrack-ng, …) are found on PATH |
 | `get_interfaces()` | List available wireless interfaces |
-| `convert_pcap(input_path, output_path)` | Convert a pcap to hc22000 format without a full re-run |
-| `run_hashcat(hash_file, wordlist, mode?, extra_args?)` | Run hashcat and return full output |
 | `fix_wlan()` | Restart wlansvc to recover the adapter after a failed run |
 | `read_source_file(relative_path)` | Read a repo source file before making any code change |
+
+### Isolated retry — skip the full attack when retrying one step
+
+| Tool | Purpose |
+|---|---|
+| `capture_handshake(interface, bssid, channel, output_path, timeout?)` | Run only the Scapy capture phase (~timeout seconds vs 5+ min for full attack) |
+| `convert_pcap(input_path, output_path)` | Convert a pcap to hc22000 format without a full re-run |
+| `run_hashcat(hash_file, wordlist, mode?, extra_args?)` | Run hashcat and return full output |
+| `run_aircrack(cap_file, wordlist, bssid?)` | Run aircrack-ng (CPU path) and return full output |
+
+### Diagnosis — understand what was captured and what failed
+
+| Tool | Purpose |
+|---|---|
+| `validate_pcap(path)` | Count 802.11/EAPOL/beacon frames — confirms whether anything was captured |
+| `inspect_hc22000(path)` | Parse hc22000 and report PMKID/EAPOL record counts, SSIDs, BSSIDs |
+| `get_potfile(hash_file?)` | Read the hashcat potfile — check if a password was already cracked |
+| `list_wordlists()` | Scan known wordlist locations so Claude knows what's available |
+| `get_interface_mode(interface)` | Query current monitor/managed mode and channel via WlanHelper |
 
 ---
 
