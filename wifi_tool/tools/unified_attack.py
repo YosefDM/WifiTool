@@ -226,33 +226,18 @@ class UnifiedAttacker:
                     self._log(
                         f"Channel lock failed (capture may miss packets): {ch_msg}", "warn"
                     )
-                # Verify WlanHelper actually applied the channel.
-                # If the reported channel differs from what we requested,
-                # the adapter may have auto-tuned elsewhere (e.g. to the AP's
-                # real channel).  Re-lock to the reported channel so Scapy
-                # sniffs where the adapter actually is, and update target.channel
-                # so deauth and display both stay consistent.
+                # Query for diagnostic purposes only.
+                # WlanHelper's channel query in monitor mode returns the
+                # adapter's previous scanning channel, NOT the channel we just
+                # set.  Do NOT re-lock based on this value — it is unreliable
+                # and would move the adapter away from the correct AP channel.
                 actual_ch = query_channel_windows(self._cap_iface)
                 if actual_ch:
-                    self._log(f"WlanHelper reports channel now: {actual_ch}", "info")
-                    try:
-                        actual_ch_int = int(actual_ch.strip())
-                        if actual_ch_int != self.target.channel:
-                            self._log(
-                                f"Channel mismatch: tried to lock {self.target.channel}, "
-                                f"adapter is on {actual_ch_int} — re-locking to {actual_ch_int}",
-                                "warn",
-                            )
-                            ch_ok2, ch_msg2 = set_channel_windows(
-                                self._cap_iface, actual_ch_int
-                            )
-                            if ch_ok2:
-                                self._log(f"Re-locked to channel {actual_ch_int}", "info")
-                            else:
-                                self._log(f"Re-lock attempt: {ch_msg2}", "warn")
-                            self.target.channel = actual_ch_int
-                    except (ValueError, AttributeError):
-                        pass
+                    self._log(
+                        f"WlanHelper query (informational): {actual_ch} "
+                        f"(adapter locked to {self.target.channel} per scan data)",
+                        "info",
+                    )
 
             # Log which wordlist will be used. If none was found yet, re-try
             # with path logging so we can see exactly what was checked.

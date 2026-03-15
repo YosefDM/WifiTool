@@ -448,12 +448,26 @@ def capture_pmkid_eapol(
         _log(f"Frame type breakdown: {summary}", "info")
 
     if not captured:
-        _log(
-            "No packets captured. "
-            "Verify the adapter is in monitor mode and Npcap is installed "
-            "with 'Support raw 802.11 traffic' enabled.",
-            "warn",
-        )
+        if total_seen == 0:
+            _log(
+                "No 802.11 frames received at all. "
+                "Verify the adapter is in monitor mode and Npcap is installed "
+                "with 'Support raw 802.11 traffic' enabled.",
+                "warn",
+            )
+        elif target_seen == 0:
+            _log(
+                f"Captured {total_seen} frame(s) but none from the target BSSID. "
+                "The adapter may be on the wrong channel — check that the AP channel "
+                "from the scan matches the channel the adapter is locked to.",
+                "warn",
+            )
+        else:
+            _log(
+                f"Captured {target_seen} frame(s) from target but no EAPOL handshake. "
+                "No client reconnected during the capture window.",
+                "warn",
+            )
         return 1
 
     try:
