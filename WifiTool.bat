@@ -19,12 +19,22 @@ if exist ".git" (
     echo   Now running:
     git log --oneline -1
     echo.
+
+    :: Clear Python bytecode cache so updated .py files are always re-read.
+    :: Without this, Python may keep using a stale .pyc even after git pull.
+    for /d /r . %%d in (__pycache__) do (
+        if exist "%%d" rd /s /q "%%d" 2>nul
+    )
+    echo   Bytecode cache cleared.
+    echo.
 )
 
 python -m pip install -r requirements.txt --quiet
 
+:: Stay visible for 4 seconds so you can read the git pull result
+timeout /t 4 /nobreak >nul
+
 :: ---- Re-launch this script as Administrator ------------------
-echo Requesting Administrator privileges...
 PowerShell -Command "Start-Process -FilePath '%~dpnx0' -ArgumentList '--elevated' -Verb RunAs"
 exit /b
 
