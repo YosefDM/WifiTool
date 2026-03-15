@@ -421,11 +421,16 @@ def capture_pmkid_eapol(
 
     _log(f"Sniffing on {interface!r} for up to {timeout}s — waiting for 802.11 frames…", "info")
     try:
+        # monitor=True tells Npcap to open the interface with RFMON (raw 802.11)
+        # mode requested at the pcap layer.  Without this flag Npcap may open
+        # the device in normal mode even though WlanHelper already set it to
+        # monitor mode, resulting in zero 802.11 frames received.
         sc.sniff(
             iface=iface_obj,
             prn=_handler,
             store=False,
             timeout=timeout,
+            monitor=True,
         )
     except KeyboardInterrupt:
         pass
@@ -443,18 +448,19 @@ def capture_pmkid_eapol(
         _log(f"Frame type breakdown: {summary}", "info")
 
     if not captured:
-        print(
-            "[!] No packets captured.\n"
-            "    Verify the adapter is in monitor mode and Npcap is installed\n"
-            "    with 'Support raw 802.11 traffic' enabled."
+        _log(
+            "No packets captured. "
+            "Verify the adapter is in monitor mode and Npcap is installed "
+            "with 'Support raw 802.11 traffic' enabled.",
+            "warn",
         )
         return 1
 
     try:
         sc.wrpcap(output_file, captured)
-        print(f"[*] Saved to {output_file}")
+        _log(f"Saved capture to {output_file}", "info")
     except Exception as exc:
-        print(f"[!] Failed to save capture: {exc}")
+        _log(f"Failed to save capture: {exc}", "error")
         return 1
 
     return 0

@@ -59,7 +59,17 @@ _COMMON_WORDLISTS: List[str] = [
 def _search_wordlist(names: List[str], log_cb=None) -> Optional[str]:
     """Search common locations for the first matching wordlist filename."""
     import sys
-    for base in [Path(sys.executable).parent, Path(__file__).parent.parent.parent]:
+    bases = [
+        Path(sys.executable).parent,           # Python install dir
+        Path(__file__).parent.parent.parent,   # repo root (wifi_tool/tools/../..)
+        # main.py's directory — catches the case where __file__ resolves to a
+        # stale/different copy of the code while the user runs from the repo root
+        Path(sys.argv[0]).parent if sys.argv else None,
+        Path(r"C:\Program Files\WifiTool"),    # Inno Setup install location
+    ]
+    for base in bases:
+        if base is None:
+            continue
         for name in names:
             candidate = base / "wordlists" / name
             if log_cb:
@@ -216,10 +226,33 @@ class UnifiedAttacker:
                     self._log(
                         f"Channel lock failed (capture may miss packets): {ch_msg}", "warn"
                     )
-                # Verify WlanHelper actually applied the channel
+                # Verify WlanHelper actually applied the channel.
+                # If the reported channel differs from what we requested,
+                # the adapter may have auto-tuned elsewhere (e.g. to the AP's
+                # real channel).  Re-lock to the reported channel so Scapy
+                # sniffs where the adapter actually is, and update target.channel
+                # so deauth and display both stay consistent.
                 actual_ch = query_channel_windows(self._cap_iface)
                 if actual_ch:
                     self._log(f"WlanHelper reports channel now: {actual_ch}", "info")
+                    try:
+                        actual_ch_int = int(actual_ch.strip())
+                        if actual_ch_int != self.target.channel:
+                            self._log(
+                                f"Channel mismatch: tried to lock {self.target.channel}, "
+                                f"adapter is on {actual_ch_int} — re-locking to {actual_ch_int}",
+                                "warn",
+                            )
+                            ch_ok2, ch_msg2 = set_channel_windows(
+                                self._cap_iface, actual_ch_int
+                            )
+                            if ch_ok2:
+                                self._log(f"Re-locked to channel {actual_ch_int}", "info")
+                            else:
+                                self._log(f"Re-lock attempt: {ch_msg2}", "warn")
+                            self.target.channel = actual_ch_int
+                    except (ValueError, AttributeError):
+                        pass
 
             # Log which wordlist will be used. If none was found yet, re-try
             # with path logging so we can see exactly what was checked.
